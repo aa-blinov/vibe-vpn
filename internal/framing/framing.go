@@ -56,17 +56,21 @@ type Frame struct {
 // Seal builds a session frame: [nonce][ciphertext]. The returned slice is
 // freshly allocated.
 func Seal(aead cipher.AEAD, tag [4]byte, typ byte, seq uint32, payload, padding []byte) []byte {
-	nonce := make([]byte, NonceLen)
+	plen := InnerHeaderLen + len(payload) + len(padding)
+	buf := make([]byte, NonceLen+plen+TagLen) // single allocation
+	nonce := buf[:NonceLen]
 	_, _ = crand.Read(nonce) // crypto/rand.Read never returns an error
-	inner := make([]byte, InnerHeaderLen+len(payload)+len(padding))
+	inner := buf[NonceLen : NonceLen+plen]
 	copy(inner[0:4], tag[:])
 	inner[4] = typ
 	binary.BigEndian.PutUint32(inner[5:9], seq)
 	binary.BigEndian.PutUint16(inner[9:11], uint16(len(payload))) // #nosec G115 -- payload <= MaxPayload
 	copy(inner[InnerHeaderLen:], payload)
 	copy(inner[InnerHeaderLen+len(payload):], padding)
-	ct := aead.Seal(nil, nonce, inner, nil)
-	return append(nonce, ct...)
+	// In-place AEAD seal: the ciphertext overwrites the plaintext region and
+	// the tag is appended, reusing buf.
+	ct := aead.Seal(inner[:0], nonce, inner, nil)
+	return buf[:NonceLen+len(ct)]
 }
 
 // Open authenticates and decrypts a session frame.

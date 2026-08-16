@@ -20,6 +20,7 @@ func BenchmarkSessionThroughput(b *testing.B) {
 	pkt := ipv4(clientIP, dst, make([]byte, 100))
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		ctun.in <- pkt
 		select {
