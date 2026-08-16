@@ -15,6 +15,51 @@ jobs:
       matrix:
         goos: [linux]
         goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Fuzz gate (short)
+        run: |
+          go test ./internal/framing/ -run '^$' -fuzz FuzzSealOpen -fuzztime 60s
+          go test ./internal/protocol/ -run '^$' -fuzz FuzzReplayWindow -fuzztime 60s
+          go test ./internal/ippkt/ -run '^$' -fuzz FuzzParse -fuzztime 60s
+      - name: Soak gate (30s)
+        run: |
+          make build
+          sudo env VPN_SOAK=1 VPN_SOAK_DURATION=30 VPN_BIN="$(pwd)/bin/vibe-vpn" \
+            go test ./test/integration/ -run TestSoak -count=1
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath -ldflags "-s -w -X main.version=${tag#v}" \
+            -o dist/vibe-vpn ./cmd/vpn
+          (cd dist && tar -czf "vibe-vpn-${tag}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" vibe-vpn)
+          (cd dist && sha256sum "vibe-vpn-${tag}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
+            > "vibe-vpn-${tag}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256")
+          mkdir -p ./bin
+          cp dist/vibe-vpn ./bin/vibe-vpn
+          sed -e "s/@VERSION@/${tag}/" -e "s/@ARCH@/${{ matrix.goarch }}/" \
+            packaging/nfpm.yaml > /tmp/nfpm.yaml
+          for pkg in deb rpm; do
+            go run github.com/goreleaser/nfpm/v2/cmd/nfpm@latest package \
+              --config /tmp/nfpm.yaml \
+              --packager "${pkg}" \
+              --target "dist/vibe-vpn-${tag}-${{ matrix.goarch }}.${pkg}"
+          done
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/*.tar.gz*
+            dist/*.deb
+            dist/*.rpm
+          generate_release_notes: true
 
   build-windows:
     name: build (windows/amd64)
@@ -41,35 +86,3 @@ jobs:
         with:
           files: dist/*.zip*
           generate_release_notes: false
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-          cache: true
-      - name: Fuzz gate (short)
-        run: |
-          go test ./internal/framing/ -run '^$$' -fuzz FuzzSealOpen -fuzztime 60s
-          go test ./internal/protocol/ -run '^$$' -fuzz FuzzReplayWindow -fuzztime 60s
-          go test ./internal/ippkt/ -run '^$$' -fuzz FuzzParse -fuzztime 60s
-      - name: Soak gate (30s)
-        run: |
-          sudo env VPN_SOAK=1 VPN_SOAK_DURATION=30 VPN_BIN="$(pwd)/bin/vibe-vpn" \
-            go test ./test/integration/ -run TestSoak -count=1
-      - name: Build and package
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          mkdir -p dist
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -trimpath -ldflags "-s -w -X main.version=${tag#v}" \
-            -o dist/vibe-vpn ./cmd/vpn
-          (cd dist && tar -czf "vibe-vpn-${tag}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" vibe-vpn)
-          (cd dist && sha256sum "vibe-vpn-${tag}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
-            > "vibe-vpn-${tag}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256")
-          ls -la dist
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*.tar.gz*
-          generate_release_notes: true
