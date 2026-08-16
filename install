@@ -56,15 +56,16 @@ main() {
 
   echo "==> downloading vibe-vpn ${tag} (${plat})"
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
-  curl -fsSL "$url" -o "$tmp/vibe.tar.gz"
-  curl -fsSL "$url.sha256" -o "$tmp/vibe.sha256"
+  trap 'rm -rf "${tmp:-}"' EXIT
+  tarname="${BIN}-${tag}-${plat}.tar.gz"
+  curl -fsSL "$url" -o "$tmp/$tarname"
+  curl -fsSL "$url.sha256" -o "$tmp/$tarname.sha256"
 
   echo "==> verifying SHA-256 checksum"
-  (cd "$tmp" && sha256sum -c vibe.sha256)
+  (cd "$tmp" && sha256sum -c "$tarname.sha256")
 
   echo "==> installing to ${INSTALL_DIR}"
-  tar -xzf "$tmp/vibe.tar.gz" -C "$tmp"
+  tar -xzf "$tmp/$tarname" -C "$tmp"
   if [ -w "$INSTALL_DIR" ]; then
     mkdir -p "$INSTALL_DIR"
     install -m 0755 "$tmp/$BIN" "$INSTALL_DIR/$BIN"
