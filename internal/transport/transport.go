@@ -22,3 +22,9 @@ type Transport interface {
 type RemoteAddr interface {
 	RemoteAddr() string
 }
+
+// BufferReleaser is implemented by transports that hand pooled buffers to
+// Receive; callers must call Release exactly once after consuming the frame.
+type BufferReleaser interface {
+	Release([]byte)
+}

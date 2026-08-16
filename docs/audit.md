@@ -34,15 +34,18 @@ What has been checked automatically and what still needs a human reviewer.
   (the crypto ceiling; ~210k frames/s).
 - Full client/server stack over loopback UDP with TUN:
   - round-trip (one packet in flight): ~31.5 µs/packet;
-  - **sustained pipeline: ~9.2 µs/packet (~109k packets/s), 13 MB/s at
-    100-byte packets (~1 Gbps at MTU-sized packets), 1 allocs/op**.
-  Optimizations applied: single-allocation in-place AEAD seal, reused
-  decryption plaintext buffer, UDP endpoint keyed by `netip.AddrPort` (no
-  per-datagram string/addr allocation), batched receive draining in the
-  session run loops (fewer goroutine wakeups under load).
-- The sustained pipeline is within ~2x of the crypto ceiling (~4.7 µs/frame);
-  the remainder is UDP syscalls and goroutine scheduling. Further gains need
-  batching (recvmmsg), io_uring / zero-copy, or a kernel data path.
+  - **sustained pipeline: ~8–9 µs/packet (~110–125k packets/s), 0 allocs/op**,
+    13–15 MB/s at 100-byte packets (~1 Gbps at MTU-sized packets).
+  Optimizations applied (measured step by step): single-allocation in-place
+  AEAD seal, reused decryption plaintext buffer, UDP endpoint keyed by
+  `netip.AddrPort` (no per-datagram string/addr allocation), batched receive
+  draining in the session run loops, and GC-stable freelists for seal output
+  and datagram buffers (0 allocations per packet).
+- The pipeline is within ~2x of the crypto ceiling (~4.7 µs/frame); the
+  remainder is UDP syscalls and goroutine scheduling. Further userspace gains
+  are small and costly: recvmmsg/sendmmsg require raw syscalls (no stdlib
+  support) for ~5–15%; io_uring is a data-path rewrite for ~15–30%. A kernel
+  data path is the only order-of-magnitude option.
 
 ## What remains
 

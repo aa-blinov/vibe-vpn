@@ -13,6 +13,35 @@ import (
 // MaxDatagram is the largest UDP payload we accept (65507 = 65535 - 8 UDP hdr).
 const MaxDatagram = 65507
 
+// fixedPool is a GC-stable freelist for datagram buffers (see framing).
+type fixedPool struct {
+	mu   sync.Mutex
+	free [][]byte
+	cap  int
+}
+
+func (p *fixedPool) get() []byte {
+	p.mu.Lock()
+	if n := len(p.free); n > 0 {
+		b := p.free[n-1]
+		p.free = p.free[:n-1]
+		p.mu.Unlock()
+		return b
+	}
+	p.mu.Unlock()
+	return make([]byte, p.cap)
+}
+
+func (p *fixedPool) put(b []byte) {
+	if cap(b) != p.cap {
+		return
+	}
+	b = b[:p.cap]
+	p.mu.Lock()
+	p.free = append(p.free, b)
+	p.mu.Unlock()
+}
+
 // peerKey is a fixed-size map key for a UDP endpoint (IPv4/IPv6 + port).
 type peerKey struct {
 	ip   [16]byte
@@ -30,6 +59,9 @@ func makePeerKey(remote netip.AddrPort) peerKey {
 }
 
 var errClosed = errors.New("udp: transport closed")
+
+// bufPool provides reusable datagram buffers (a GC-stable freelist).
+var bufPool = fixedPool{cap: MaxDatagram}
 
 // Client is a connected UDP transport: one socket, one remote peer. It reads
 // datagrams in the background and hands them out one at a time via Receive.
@@ -63,25 +95,29 @@ func Dial(addr string) (*Client, error) {
 }
 
 func (t *Client) readLoop() {
-	buf := make([]byte, MaxDatagram)
 	for {
+		buf := bufPool.get()
 		n, err := t.conn.Read(buf)
 		if err != nil {
+			bufPool.put(buf)
 			close(t.recvCh)
 			return
 		}
 		if n == 0 {
+			bufPool.put(buf)
 			continue
 		}
-		cp := make([]byte, n)
-		copy(cp, buf[:n])
 		select {
-		case t.recvCh <- cp:
+		case t.recvCh <- buf[:n]:
 		case <-t.done:
+			bufPool.put(buf)
 			return
 		}
 	}
 }
+
+// Release returns a received frame's buffer to the pool.
+func (t *Client) Release(b []byte) { bufPool.put(b) }
 
 // Send writes one datagram to the remote peer.
 func (t *Client) Send(b []byte) error {
@@ -166,47 +202,53 @@ func Listen(addr string) (*Server, error) {
 }
 
 func (s *Server) readLoop() {
-	buf := make([]byte, MaxDatagram)
 	for {
+		buf := bufPool.get()
 		n, remote, err := s.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			return // socket closed
 		}
 		if n == 0 {
+			bufPool.put(buf)
 			continue
 		}
-		cp := make([]byte, n)
-		copy(cp, buf[:n])
+		s.dispatch(remote, buf[:n])
+	}
+}
 
-		key := makePeerKey(remote)
+// dispatch routes one datagram to its endpoint or a new session.
+func (s *Server) dispatch(remote netip.AddrPort, buf []byte) {
+	key := makePeerKey(remote)
+	s.mu.Lock()
+	ep, known := s.eps[key]
+	if !known && !s.closed {
+		ep = &endpoint{remote: remote, ch: make(chan []byte, 512), done: make(chan struct{})}
+		s.eps[key] = ep
+	}
+	s.mu.Unlock()
+	if !known {
+		if s.closed {
+			bufPool.put(buf)
+			return
+		}
+		t := &endpointTransport{srv: s, remote: remote, ep: ep}
 		s.mu.Lock()
-		ep, known := s.eps[key]
-		if !known && !s.closed {
-			ep = &endpoint{remote: remote, ch: make(chan []byte, 512), done: make(chan struct{})}
-			s.eps[key] = ep
-		}
+		fn := s.onNewPeer
 		s.mu.Unlock()
-		if !known {
-			if s.closed {
-				return
-			}
-			t := &endpointTransport{srv: s, remote: remote, ep: ep}
+		if fn == nil || !fn(remote, t) {
+			// Rejected: drop and remove.
 			s.mu.Lock()
-			fn := s.onNewPeer
+			delete(s.eps, key)
 			s.mu.Unlock()
-			if fn == nil || !fn(remote, t) {
-				// Rejected: drop and remove.
-				s.mu.Lock()
-				delete(s.eps, key)
-				s.mu.Unlock()
-				close(ep.done)
-				continue
-			}
+			close(ep.done)
+			bufPool.put(buf)
+			return
 		}
-		select {
-		case ep.ch <- cp:
-		case <-ep.done:
-		}
+	}
+	select {
+	case ep.ch <- buf:
+	case <-ep.done:
+		bufPool.put(buf)
 	}
 }
 
@@ -218,6 +260,9 @@ func (s *Server) SendTo(remote netip.AddrPort, b []byte) error {
 	_, err := s.conn.WriteToUDPAddrPort(b, remote)
 	return err
 }
+
+// Release returns a received frame's buffer to the pool.
+func (s *Server) Release(b []byte) { bufPool.put(b) }
 
 // Addr returns the address the server is bound to.
 func (s *Server) Addr() *net.UDPAddr { return s.addr }
@@ -284,3 +329,6 @@ func (t *endpointTransport) Close() error {
 
 // RemoteAddr returns the remote peer's address.
 func (t *endpointTransport) RemoteAddr() string { return t.remote.String() }
+
+// Release returns a received frame's buffer to the server's pool.
+func (t *endpointTransport) Release(b []byte) { t.srv.Release(b) }

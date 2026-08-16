@@ -169,6 +169,20 @@ func (c *Client) Run(ctx context.Context, tun TUN, onAssign func(ip, gw net.IP, 
 				continue
 			}
 			c.sendPacket(pkt)
+			// Drain further TUN packets in the same iteration to cut down on
+			// goroutine wakeups under sustained send load.
+		drainTun:
+			for {
+				select {
+				case p2 := <-tunCh:
+					if p2 == nil {
+						break drainTun
+					}
+					c.sendPacket(p2)
+				default:
+					break drainTun
+				}
+			}
 
 		case r := <-c.recvCh:
 			// Drain any further buffered frames in the same iteration to cut
@@ -222,6 +236,7 @@ func (c *Client) drainRecv(r recvResult, tun TUN, ctx context.Context, onAssign 
 		}
 		// Malformed frames are counted and ignored.
 	}
+	releaseBuf(c.t, r.data)
 	return false
 }
 
@@ -341,7 +356,9 @@ func (c *Client) waitRaw(ctx context.Context, try func([]byte) error) error {
 			if r.err != nil {
 				return r.err
 			}
-			if err := try(r.data); err == nil {
+			err := try(r.data)
+			releaseBuf(c.t, r.data)
+			if err == nil {
 				return nil
 			}
 		}
@@ -363,6 +380,7 @@ func (c *Client) waitAssign(ctx context.Context) ([]byte, error) {
 				return nil, r.err
 			}
 			f, err := c.keys.open(r.data)
+			releaseBuf(c.t, r.data)
 			if err != nil {
 				continue
 			}
@@ -370,7 +388,8 @@ func (c *Client) waitAssign(ctx context.Context) ([]byte, error) {
 				continue
 			}
 			if f.Type == protocol.MsgAssign {
-				return f.Payload, nil
+				// payload aliases the released buffer; copy it before returning
+				return append([]byte(nil), f.Payload...), nil
 			}
 		}
 	}
@@ -559,7 +578,9 @@ func (c *Client) encryptSend(typ byte, pt []byte) bool {
 	}
 	padding := c.cfg.Shaping.PaddingFor(framing.InnerHeaderLen + len(pt))
 	wire, _ := c.keys.seal(c.tag, typ, pt, makePadding(padding))
-	if err := c.t.Send(wire); err != nil {
+	err := c.t.Send(wire)
+	framing.PutWire(wire)
+	if err != nil {
 		return false
 	}
 	c.stats.PacketsSent.Add(1)

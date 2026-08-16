@@ -398,6 +398,18 @@ func (s *serverSession) run() {
 			if s.keys != nil && s.ip != nil {
 				s.encryptSend(protocol.MsgData, pkt)
 			}
+			// Drain further replies in the same iteration.
+		drainReply:
+			for {
+				select {
+				case p2 := <-s.replyCh:
+					if s.keys != nil && s.ip != nil {
+						s.encryptSend(protocol.MsgData, p2)
+					}
+				default:
+					break drainReply
+				}
+			}
 		case <-ticker.C:
 			if s.keys == nil && time.Since(s.created) > s.mgr.cfg.HandshakeTimeout {
 				return // handshake never completed
@@ -430,9 +442,11 @@ func (s *serverSession) drainRecv(r recvResult) bool {
 	s.lastRecv = time.Now()
 	if err := s.handle(r.data); err != nil {
 		if errors.Is(err, errFatal) {
+			releaseBuf(s.t, r.data)
 			return false
 		}
 	}
+	releaseBuf(s.t, r.data)
 	return true
 }
 
@@ -648,7 +662,9 @@ func (s *serverSession) encryptSend(typ byte, pt []byte) bool {
 	}
 	padding := s.mgr.cfg.Shaping.PaddingFor(framing.InnerHeaderLen + len(pt))
 	wire, _ := s.keys.seal(s.tag, typ, pt, makePadding(padding))
-	if err := s.t.Send(wire); err != nil {
+	err := s.t.Send(wire)
+	framing.PutWire(wire)
+	if err != nil {
 		return false
 	}
 	s.stats.PacketsSent.Add(1)

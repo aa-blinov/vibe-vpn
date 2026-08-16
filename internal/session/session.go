@@ -20,6 +20,7 @@ import (
 
 	"github.com/aa-blinov/vibe-vpn/internal/framing"
 	"github.com/aa-blinov/vibe-vpn/internal/protocol"
+	"github.com/aa-blinov/vibe-vpn/internal/transport"
 )
 
 // TUN is the data plane the session moves IP packets across. It is satisfied
@@ -119,6 +120,14 @@ func randomTag() [4]byte {
 	var t [4]byte
 	randRead(t[:])
 	return t
+}
+
+// releaseBuf returns a received frame's buffer to the transport, if it pools
+// buffers. Must be called exactly once after the frame is consumed.
+func releaseBuf(t transport.Transport, b []byte) {
+	if r, ok := t.(transport.BufferReleaser); ok && b != nil {
+		r.Release(b)
+	}
 }
 
 // decoyJitter returns a random cover-traffic interval around base, so decoy

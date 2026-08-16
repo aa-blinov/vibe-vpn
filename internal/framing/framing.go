@@ -20,6 +20,7 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -57,7 +58,7 @@ type Frame struct {
 // freshly allocated.
 func Seal(aead cipher.AEAD, tag [4]byte, typ byte, seq uint32, payload, padding []byte) []byte {
 	plen := InnerHeaderLen + len(payload) + len(padding)
-	buf := make([]byte, NonceLen+plen+TagLen) // single allocation
+	buf := GetWire()[:NonceLen+plen+TagLen] // pooled buffer; callers must PutWire it
 	nonce := buf[:NonceLen]
 	_, _ = crand.Read(nonce) // crypto/rand.Read never returns an error
 	inner := buf[NonceLen : NonceLen+plen]
@@ -197,6 +198,47 @@ func webWireSize() int {
 		return 1200 + randN(300) // 1200..1499
 	}
 }
+
+// fixedPool is a simple bounded freelist that, unlike sync.Pool, is not
+// cleared by the garbage collector between allocations. It never grows beyond
+// the peak number of in-flight buffers.
+type fixedPool struct {
+	mu   sync.Mutex
+	free [][]byte
+	cap  int
+}
+
+func (p *fixedPool) get() []byte {
+	p.mu.Lock()
+	if n := len(p.free); n > 0 {
+		b := p.free[n-1]
+		p.free = p.free[:n-1]
+		p.mu.Unlock()
+		return b
+	}
+	p.mu.Unlock()
+	return make([]byte, 0, p.cap)
+}
+
+func (p *fixedPool) put(b []byte) {
+	if cap(b) != p.cap {
+		return
+	}
+	b = b[:0]
+	p.mu.Lock()
+	p.free = append(p.free, b)
+	p.mu.Unlock()
+}
+
+// wirePool reuses seal output buffers. Callers must return them with PutWire
+// exactly once after the frame has been handed to the transport.
+var wirePool = fixedPool{cap: MaxWire}
+
+// GetWire returns a reusable buffer for seal output.
+func GetWire() []byte { return wirePool.get() }
+
+// PutWire returns a seal output buffer to the pool.
+func PutWire(b []byte) { wirePool.put(b) }
 
 // randN returns a cryptographically random integer in [0, max). Traffic
 // shaping uses it so even packet-size randomness does not leak through a weak
