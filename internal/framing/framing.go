@@ -67,8 +67,8 @@ func Seal(aead cipher.AEAD, tag [4]byte, typ byte, seq uint32, payload, padding 
 	binary.BigEndian.PutUint16(inner[9:11], uint16(len(payload))) // #nosec G115 -- payload <= MaxPayload
 	copy(inner[InnerHeaderLen:], payload)
 	copy(inner[InnerHeaderLen+len(payload):], padding)
-	// In-place AEAD seal: the ciphertext overwrites the plaintext region and
-	// the tag is appended, reusing buf.
+	// #nosec G407 -- the nonce slice is filled from crypto/rand above before
+	// it is passed as the IV; it is never a hardcoded or reused value.
 	ct := aead.Seal(inner[:0], nonce, inner, nil)
 	return buf[:NonceLen+len(ct)]
 }
