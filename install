@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# vibe-vpn installer.
+#
+#   curl -fsSL https://aa-blinov.github.io/vibe-vpn/install | bash
+#
+# Downloads the latest release binary for your platform, verifies its SHA-256
+# checksum and installs it. Configuration is generated on first run with
+# `vibe-vpn server --domain ...` / `vibe-vpn client --server ... --peer ...`.
+set -euo pipefail
+
+REPO="aa-blinov/vibe-vpn"
+VERSION="${VIBE_VPN_VERSION:-latest}"
+BIN="vibe-vpn"
+DEFAULT_DIR="/usr/local/bin"
+INSTALL_DIR="${VIBE_VPN_INSTALL_DIR:-$DEFAULT_DIR}"
+
+die() { echo "error: $*" >&2; exit 1; }
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"
+}
+
+platform() {
+  local os arch
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    *) die "unsupported OS: $(uname -s)" ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+  echo "${os}-${arch}"
+}
+
+latest_tag() {
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1
+}
+
+main() {
+  need curl
+  need tar
+  need uname
+
+  local plat tag url tmp
+  plat="$(platform)"
+  if [ "$VERSION" = "latest" ]; then
+    tag="$(latest_tag)"
+    [ -n "$tag" ] || die "could not determine the latest release"
+  else
+    tag="$VERSION"
+  fi
+  url="https://github.com/${REPO}/releases/download/${tag}/${BIN}-${tag}-${plat}.tar.gz"
+
+  echo "==> downloading vibe-vpn ${tag} (${plat})"
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  curl -fsSL "$url" -o "$tmp/vibe.tar.gz"
+  curl -fsSL "$url.sha256" -o "$tmp/vibe.sha256"
+
+  echo "==> verifying SHA-256 checksum"
+  (cd "$tmp" && sha256sum -c vibe.sha256)
+
+  echo "==> installing to ${INSTALL_DIR}"
+  tar -xzf "$tmp/vibe.tar.gz" -C "$tmp"
+  if [ -w "$INSTALL_DIR" ]; then
+    mkdir -p "$INSTALL_DIR"
+    install -m 0755 "$tmp/$BIN" "$INSTALL_DIR/$BIN"
+  else
+    command -v sudo >/dev/null 2>&1 || die "${INSTALL_DIR} is not writable and sudo is unavailable"
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo install -m 0755 "$tmp/$BIN" "$INSTALL_DIR/$BIN"
+  fi
+
+  echo "==> done"
+  "$INSTALL_DIR/$BIN" --version
+  cat <<EOF
+
+Next steps:
+  server (on the VPS):   sudo $INSTALL_DIR/$BIN server --domain your.domain --out /etc/vibe-vpn-server
+  client (on your machine):
+                         sudo $INSTALL_DIR/$BIN client --server your.domain:443 --peer /etc/vibe-vpn-server --out /etc/vibe-vpn-client
+  verify:                ping 10.77.0.1
+  interactive setup:     ./vibe-vpn.sh server | client
+EOF
+}
+
+main "$@"
