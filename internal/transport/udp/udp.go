@@ -4,6 +4,7 @@ package udp
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/aa-blinov/vibe-vpn/internal/transport"
@@ -11,6 +12,22 @@ import (
 
 // MaxDatagram is the largest UDP payload we accept (65507 = 65535 - 8 UDP hdr).
 const MaxDatagram = 65507
+
+// peerKey is a fixed-size map key for a UDP endpoint (IPv4/IPv6 + port).
+type peerKey struct {
+	ip   [16]byte
+	port uint16
+	is4  bool
+}
+
+func makePeerKey(remote netip.AddrPort) peerKey {
+	var k peerKey
+	ip := remote.Addr().As16()
+	copy(k.ip[:], ip[:])
+	k.port = remote.Port()
+	k.is4 = remote.Addr().Is4()
+	return k
+}
 
 var errClosed = errors.New("udp: transport closed")
 
@@ -100,7 +117,7 @@ func (t *Client) RemoteAddr() string { return t.remote.String() }
 
 // endpoint is a single peer's receive queue on the shared server socket.
 type endpoint struct {
-	remote *net.UDPAddr
+	remote netip.AddrPort
 	ch     chan []byte
 	done   chan struct{}
 }
@@ -113,20 +130,20 @@ type Server struct {
 
 	// mu guards eps, closed and onNewPeer.
 	mu  sync.Mutex
-	eps map[string]*endpoint
+	eps map[peerKey]*endpoint
 
 	// onNewPeer is invoked (from the read loop) the first time a datagram is
 	// seen from a given address. It hands the caller a Transport bound to that
 	// peer; the caller is expected to keep reading from it. If the callback
 	// returns false the peer is ignored.
-	onNewPeer func(remote *net.UDPAddr, t transport.Transport) bool
+	onNewPeer func(remote netip.AddrPort, t transport.Transport) bool
 
 	closed bool
 }
 
 // SetOnNewPeer installs the callback used to admit new peers. It must be
 // called before the first datagram is expected.
-func (s *Server) SetOnNewPeer(fn func(remote *net.UDPAddr, t transport.Transport) bool) {
+func (s *Server) SetOnNewPeer(fn func(remote netip.AddrPort, t transport.Transport) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onNewPeer = fn
@@ -142,7 +159,7 @@ func Listen(addr string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{conn: conn, addr: conn.LocalAddr().(*net.UDPAddr), eps: make(map[string]*endpoint)}
+	s := &Server{conn: conn, addr: conn.LocalAddr().(*net.UDPAddr), eps: make(map[peerKey]*endpoint)}
 	go s.readLoop()
 	s.SetOnNewPeer(nil)
 	return s, nil
@@ -151,7 +168,7 @@ func Listen(addr string) (*Server, error) {
 func (s *Server) readLoop() {
 	buf := make([]byte, MaxDatagram)
 	for {
-		n, remote, err := s.conn.ReadFromUDP(buf)
+		n, remote, err := s.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			return // socket closed
 		}
@@ -161,7 +178,7 @@ func (s *Server) readLoop() {
 		cp := make([]byte, n)
 		copy(cp, buf[:n])
 
-		key := remote.String()
+		key := makePeerKey(remote)
 		s.mu.Lock()
 		ep, known := s.eps[key]
 		if !known && !s.closed {
@@ -194,11 +211,11 @@ func (s *Server) readLoop() {
 }
 
 // SendTo writes a datagram to the given peer.
-func (s *Server) SendTo(remote *net.UDPAddr, b []byte) error {
+func (s *Server) SendTo(remote netip.AddrPort, b []byte) error {
 	if len(b) == 0 || len(b) > MaxDatagram {
 		return errors.New("udp: datagram too large")
 	}
-	_, err := s.conn.WriteToUDP(b, remote)
+	_, err := s.conn.WriteToUDPAddrPort(b, remote)
 	return err
 }
 
@@ -210,7 +227,7 @@ func (s *Server) Close() error {
 	s.mu.Lock()
 	s.closed = true
 	eps := s.eps
-	s.eps = make(map[string]*endpoint)
+	s.eps = make(map[peerKey]*endpoint)
 	s.mu.Unlock()
 	for _, ep := range eps {
 		close(ep.done)
@@ -222,7 +239,7 @@ func (s *Server) Close() error {
 // interface so the session layer is identical to the client's.
 type endpointTransport struct {
 	srv    *Server
-	remote *net.UDPAddr
+	remote netip.AddrPort
 	ep     *endpoint
 	mu     sync.Mutex
 	closed bool
@@ -253,8 +270,8 @@ func (t *endpointTransport) Close() error {
 	t.closed = true
 	s := t.srv
 	s.mu.Lock()
-	if s.eps[t.remote.String()] == t.ep {
-		delete(s.eps, t.remote.String())
+	if s.eps[makePeerKey(t.remote)] == t.ep {
+		delete(s.eps, makePeerKey(t.remote))
 	}
 	s.mu.Unlock()
 	select {

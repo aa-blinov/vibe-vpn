@@ -75,15 +75,35 @@ func Seal(aead cipher.AEAD, tag [4]byte, typ byte, seq uint32, payload, padding 
 
 // Open authenticates and decrypts a session frame.
 func Open(aead cipher.AEAD, wire []byte) (Frame, error) {
+	inner, err := OpenInto(aead, wire, nil)
+	if err != nil {
+		return Frame{}, err
+	}
+	return ParseInner(inner)
+}
+
+// OpenInto authenticates and decrypts a session frame into sink, growing it as
+// needed, and returns the decrypted inner plaintext. The returned slice may
+// alias sink; callers that reuse sink must consume the result before the next
+// call.
+func OpenInto(aead cipher.AEAD, wire, sink []byte) ([]byte, error) {
 	if len(wire) < NonceLen+TagLen {
-		return Frame{}, ErrShort
+		return nil, ErrShort
 	}
 	nonce := wire[:NonceLen]
 	ct := wire[NonceLen:]
-	inner, err := aead.Open(nil, nonce, ct, nil)
+	inner, err := aead.Open(sink, nonce, ct, nil)
 	if err != nil {
-		return Frame{}, ErrAuth
+		return nil, ErrAuth
 	}
+	if len(inner) < InnerHeaderLen {
+		return nil, ErrShort
+	}
+	return inner, nil
+}
+
+// ParseInner decodes the header and payload from a decrypted inner plaintext.
+func ParseInner(inner []byte) (Frame, error) {
 	if len(inner) < InnerHeaderLen {
 		return Frame{}, ErrShort
 	}

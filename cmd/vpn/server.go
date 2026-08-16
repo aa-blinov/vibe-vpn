@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -213,7 +214,7 @@ func runServer(args []string) error {
 			return err
 		}
 		defer us.Close()
-		us.SetOnNewPeer(func(_ *net.UDPAddr, t transport.Transport) bool {
+		us.SetOnNewPeer(func(_ netip.AddrPort, t transport.Transport) bool {
 			return mgr.HandleTransport(framing.Jitter(t, shp.Jitter))
 		})
 		logger.Printf("listening on %s (subnet %s)", sc.Listen, subnet)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
@@ -123,7 +124,7 @@ func startServer(t testing.TB, kp *crypto.Keypair, sub *net.IPNet, mtu int, peer
 	if err != nil {
 		t.Fatal(err)
 	}
-	us.SetOnNewPeer(func(_ *net.UDPAddr, tr transport.Transport) bool {
+	us.SetOnNewPeer(func(_ netip.AddrPort, tr transport.Transport) bool {
 		return mgr.HandleTransport(tr)
 	})
 	ctx, cancel := context.WithCancel(context.Background())

@@ -48,6 +48,10 @@ type Keys struct {
 	recvAEAD cipher.AEAD
 	sendSeq  uint64
 	replay   *protocol.ReplayWindow
+	// recvBuf is reused as the AEAD plaintext sink so decryption does not
+	// allocate per frame. It is only valid until the next open; callers must
+	// consume the payload synchronously.
+	recvBuf []byte
 }
 
 // newKeys builds a Keys pair. c2s encrypts client->server traffic, s2c
@@ -84,14 +88,21 @@ func (k *Keys) seal(tag [4]byte, typ byte, payload, padding []byte) ([]byte, uin
 }
 
 // open authenticates a frame, enforces the replay window and returns the
-// decrypted metadata and payload.
+// decrypted metadata and payload. The payload aliases the reused receive
+// buffer and is only valid until the next open call; callers consume it
+// synchronously.
 func (k *Keys) open(wire []byte) (framing.Frame, error) {
-	f, err := framing.Open(k.recvAEAD, wire)
+	inner, err := framing.OpenInto(k.recvAEAD, wire, k.recvBuf)
 	if err != nil {
 		if errors.Is(err, framing.ErrAuth) {
-			return f, ErrAuth
+			return framing.Frame{}, ErrAuth
 		}
-		return f, err
+		return framing.Frame{}, err
+	}
+	k.recvBuf = inner[:0] // reuse the backing array next time
+	f, err := framing.ParseInner(inner)
+	if err != nil {
+		return framing.Frame{}, err
 	}
 	if !k.replay.Check(uint64(f.Seq)) {
 		return f, ErrReplay

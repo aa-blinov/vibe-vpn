@@ -1,7 +1,7 @@
 package udp
 
 import (
-	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -15,7 +15,7 @@ func TestLoopbackRoundtrip(t *testing.T) {
 	}
 	t.Log("server addr", srv.Addr())
 	got := make(chan string, 1)
-	srv.SetOnNewPeer(func(remote *net.UDPAddr, tr transport.Transport) bool {
+	srv.SetOnNewPeer(func(remote netip.AddrPort, tr transport.Transport) bool {
 		go func() {
 			b, err := tr.Receive()
 			if err != nil {

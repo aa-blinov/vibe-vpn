@@ -19,13 +19,16 @@ func BenchmarkSessionThroughput(b *testing.B) {
 	dst := net.ParseIP("8.8.8.8")
 	pkt := ipv4(clientIP, dst, make([]byte, 100))
 
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		ctun.in <- pkt
 		select {
 		case <-srv.tun.out:
-		case <-time.After(5 * time.Second):
+		case <-timeout.C:
 			b.Fatal("packet did not traverse")
 		}
 	}
