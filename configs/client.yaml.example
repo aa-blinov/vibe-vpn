@@ -13,10 +13,10 @@ client:
   # through the tunnel, with the VPN server's own address pinned to the real
   # network so the tunnel does not capture itself).
   setup_routing: true
-  keepalive_interval: 20
+  keepalive_interval: 10
   session_timeout: 300
   rekey_after_packets: 268435456
-  rekey_after_seconds: 3600
+  rekey_after_seconds: 180
   stats_interval: 15
   # Prometheus metrics endpoint (loopback; empty disables).
   # metrics: 127.0.0.1:9090

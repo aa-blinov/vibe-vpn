@@ -478,7 +478,7 @@ server:
   #   - <client1 public key>
   #   - <client2 public key>
   mtu: 1280
-  keepalive_interval: 20
+  keepalive_interval: 10
   session_timeout: 300
   # debug: /tmp/vibe-vpn-server  # writes /tmp/vibe-vpn-server.pcap
 ```
@@ -496,7 +496,7 @@ client:
   keepalive_interval: 20
   session_timeout: 300
   rekey_after_packets: 268435456
-  rekey_after_seconds: 3600
+  rekey_after_seconds: 180
   # debug: /tmp/vibe-vpn-client  # writes /tmp/vibe-vpn-client.pcap
 ```
 

@@ -16,7 +16,7 @@ server:
   # peers:
   #   - CHANGE_ME_CLIENT_PUBLIC_KEY
   mtu: 1280
-  keepalive_interval: 20
+  keepalive_interval: 10
   session_timeout: 300
   stats_interval: 15
   # Prometheus metrics endpoint (loopback; empty disables).

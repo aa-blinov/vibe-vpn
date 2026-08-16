@@ -113,8 +113,12 @@ func setupServerDir(out, domain, tlsListen, listen, subnet, iface string) (strin
 		OutboundInterface: "eth0",
 		NAT:               true,
 		MTU:               config.DefaultMTU,
-		Keepalive:         config.DefaultKeepalive,
+		Keepalive:         10, // fresh NAT state and fewer DPI idle-cuts than the 20s default
 		SessionTimeout:    config.DefaultSessionTimeout,
+		// Quality default: pad server->client bulk to fixed buckets and emit
+		// decoy frames when idle, so the flow resists passive fingerprinting.
+		Shaping: config.Shaping{Padding: "bucket", Bucket: 128, DecoyIntervalS: 2},
+		Ctl:     filepath.Join(abs, "server.sock"),
 		TLS: &config.ServerTLS{
 			Listen: tlsListen,
 			Cert:   filepath.Join(abs, "server.crt"),
@@ -160,11 +164,15 @@ func setupClientDir(out, serverAddr, peer string, desync bool, nfqws string) (st
 		PrivateKey:        crypto.EncodeKey(kp.Private),
 		ServerPublicKey:   pubKey,
 		MTU:               config.DefaultMTU,
-		Keepalive:         config.DefaultKeepalive,
+		Keepalive:         10, // fresh NAT state and fewer DPI idle-cuts than the 20s default
 		SessionTimeout:    config.DefaultSessionTimeout,
 		SetupRouting:      true,
 		RekeyAfterPackets: 1 << 28,
-		RekeyAfterSeconds: 3600,
+		RekeyAfterSeconds: 180, // fresh keys for DPI, without rekeying every 2 minutes
+		// Quality default: HTTPS-shaped packet sizes, cover traffic while idle
+		// and light timing jitter to resist passive fingerprinting.
+		Shaping: config.Shaping{Padding: "web", DecoyIntervalS: 2, JitterMaxMs: 20},
+		Ctl:     filepath.Join(abs, "client.sock"),
 		TLS: &config.ClientTLS{
 			ServerName: domain,
 			CA:         filepath.Join(peer, "server.crt"),
