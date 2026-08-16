@@ -18,6 +18,8 @@ server:
   keepalive_interval: 20
   session_timeout: 300
   stats_interval: 15
+  # Prometheus metrics endpoint (loopback; empty disables).
+  # metrics: 127.0.0.1:9090
   # Wire-level traffic shaping (see README). The server's padding policy can
   # differ from the client's: each side shapes its own sends.
   shaping:

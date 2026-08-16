@@ -23,7 +23,7 @@ import (
 
 // ---------------------------------------------------------------- test data
 
-func testKeypair(t *testing.T) *crypto.Keypair {
+func testKeypair(t testing.TB) *crypto.Keypair {
 	t.Helper()
 	kp, err := crypto.GenerateKeypair()
 	if err != nil {
@@ -32,7 +32,7 @@ func testKeypair(t *testing.T) *crypto.Keypair {
 	return kp
 }
 
-func testSubnet(t *testing.T) *net.IPNet {
+func testSubnet(t testing.TB) *net.IPNet {
 	t.Helper()
 	_, n, err := net.ParseCIDR("10.77.0.0/24")
 	if err != nil {
@@ -51,7 +51,7 @@ func ipv4(src, dst net.IP, payload []byte) []byte {
 	return pkt
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
+func waitFor(t testing.TB, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
@@ -101,7 +101,7 @@ type testServer struct {
 	cancel context.CancelFunc
 }
 
-func startServer(t *testing.T, kp *crypto.Keypair, sub *net.IPNet, mtu int, peers map[string][]byte) *testServer {
+func startServer(t testing.TB, kp *crypto.Keypair, sub *net.IPNet, mtu int, peers map[string][]byte) *testServer {
 	t.Helper()
 	mgr, err := NewManager(ServerConfig{
 		Keypair:          kp,
@@ -139,7 +139,7 @@ type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
 
-func (s *testServer) readTUNPacket(t *testing.T) []byte {
+func (s *testServer) readTUNPacket(t testing.TB) []byte {
 	t.Helper()
 	select {
 	case pkt := <-s.tun.out:
@@ -152,7 +152,7 @@ func (s *testServer) readTUNPacket(t *testing.T) []byte {
 
 // ------------------------------------------------------------------- helpers
 
-func newTestClient(t *testing.T, srv *testServer, kp *crypto.Keypair, serverPub []byte, cfg ClientConfig) (*Client, *fakeTUN, chan net.IP) {
+func newTestClient(t testing.TB, srv *testServer, kp *crypto.Keypair, serverPub []byte, cfg ClientConfig) (*Client, *fakeTUN, chan net.IP) {
 	t.Helper()
 	if cfg.MTU == 0 {
 		cfg.MTU = 1280
@@ -185,7 +185,7 @@ func newTestClient(t *testing.T, srv *testServer, kp *crypto.Keypair, serverPub 
 	return client, ctun, assigned
 }
 
-func waitAssigned(t *testing.T, ch chan net.IP) net.IP {
+func waitAssigned(t testing.TB, ch chan net.IP) net.IP {
 	t.Helper()
 	select {
 	case ip := <-ch:
@@ -520,7 +520,7 @@ func (m *memTransport) captured() [][]byte {
 }
 
 // startMemServer builds a manager served over a memTransport.
-func startMemServer(t *testing.T, kp *crypto.Keypair, cfg ServerConfig) (*Manager, *memTransport, *fakeTUN) {
+func startMemServer(t testing.TB, kp *crypto.Keypair, cfg ServerConfig) (*Manager, *memTransport, *fakeTUN) {
 	t.Helper()
 	if cfg.Keypair == nil {
 		cfg.Keypair = kp
@@ -556,7 +556,7 @@ func startMemServer(t *testing.T, kp *crypto.Keypair, cfg ServerConfig) (*Manage
 
 // memClient builds a client whose transport is wired to the server's mem
 // transport, so wire frames are observable on the client side.
-func memClient(t *testing.T, srv *memTransport, cfg ClientConfig) (*Client, *memTransport, *fakeTUN, chan net.IP) {
+func memClient(t testing.TB, srv *memTransport, cfg ClientConfig) (*Client, *memTransport, *fakeTUN, chan net.IP) {
 	t.Helper()
 	if cfg.MTU == 0 {
 		cfg.MTU = 1280

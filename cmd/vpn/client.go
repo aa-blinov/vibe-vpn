@@ -18,6 +18,7 @@ import (
 	"github.com/aa-blinov/vibe-vpn/internal/crypto"
 	"github.com/aa-blinov/vibe-vpn/internal/desync"
 	"github.com/aa-blinov/vibe-vpn/internal/framing"
+	"github.com/aa-blinov/vibe-vpn/internal/metrics"
 	"github.com/aa-blinov/vibe-vpn/internal/pcap"
 	"github.com/aa-blinov/vibe-vpn/internal/routing"
 	"github.com/aa-blinov/vibe-vpn/internal/session"
@@ -163,6 +164,30 @@ func runClient(args []string) error {
 		Pcap:              pcapWriter,
 		Log:               logger,
 	})
+
+	// Optional Prometheus metrics endpoint on a loopback address.
+	var metricsSrv *metrics.Server
+	if cc.Metrics != "" {
+		metricsSrv, err = metrics.Serve(cc.Metrics, func() map[string]float64 {
+			st := client.Stats()
+			return map[string]float64{
+				"vibe_tx_packets":       float64(st.PacketsSent.Load()),
+				"vibe_tx_bytes":         float64(st.BytesSent.Load()),
+				"vibe_rx_packets":       float64(st.PacketsReceived.Load()),
+				"vibe_rx_bytes":         float64(st.BytesReceived.Load()),
+				"vibe_dropped_total":    float64(st.PacketsDropped.Load()),
+				"vibe_reconnects_total": float64(st.Reconnects.Load()),
+				"vibe_rekeys_total":     float64(st.Rekeys.Load()),
+				"vibe_loss_total":       float64(st.LossTotal.Load()),
+				"vibe_rtt_seconds":      st.RTT().Seconds(),
+			}
+		})
+		if err != nil {
+			return err
+		}
+		defer metricsSrv.Close()
+		logger.Printf("metrics on http://%s/metrics", metricsSrv.Addr())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -14,6 +14,7 @@ import (
 	"github.com/aa-blinov/vibe-vpn/internal/config"
 	"github.com/aa-blinov/vibe-vpn/internal/crypto"
 	"github.com/aa-blinov/vibe-vpn/internal/framing"
+	"github.com/aa-blinov/vibe-vpn/internal/metrics"
 	"github.com/aa-blinov/vibe-vpn/internal/pcap"
 	"github.com/aa-blinov/vibe-vpn/internal/routing"
 	"github.com/aa-blinov/vibe-vpn/internal/session"
@@ -125,6 +126,24 @@ func runServer(args []string) error {
 		return err
 	}
 	mgr.SetTUN(iface)
+
+	// Optional Prometheus metrics endpoint on a loopback address.
+	var metricsSrv *metrics.Server
+	if sc.Metrics != "" {
+		metricsSrv, err = metrics.Serve(sc.Metrics, func() map[string]float64 {
+			st := mgr.Stats()
+			return map[string]float64{
+				"vibe_sessions":         float64(st.Sessions.Load()),
+				"vibe_handshakes_total": float64(st.Handshakes.Load()),
+				"vibe_dropped_total":    float64(st.Dropped.Load()),
+			}
+		})
+		if err != nil {
+			return err
+		}
+		defer metricsSrv.Close()
+		logger.Printf("metrics on http://%s/metrics", metricsSrv.Addr())
+	}
 
 	var pcapWriter *pcap.Writer
 	if *debug || sc.Debug != "" {

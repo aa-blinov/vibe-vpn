@@ -17,6 +17,8 @@ client:
   rekey_after_packets: 268435456
   rekey_after_seconds: 3600
   stats_interval: 15
+  # Prometheus metrics endpoint (loopback; empty disables).
+  # metrics: 127.0.0.1:9090
   # Wire-level traffic shaping: uniform packet sizes, timing jitter and decoy
   # frames while idle. This is what makes the flow harder to fingerprint by
   # passive traffic classification.

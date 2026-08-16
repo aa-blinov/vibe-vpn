@@ -33,6 +33,7 @@ type Client struct {
 	RekeyAfterPackets uint64     `yaml:"rekey_after_packets,omitempty"`
 	RekeyAfterSeconds int        `yaml:"rekey_after_seconds,omitempty"`
 	SetupRouting      bool       `yaml:"setup_routing"`
+	Metrics           string     `yaml:"metrics,omitempty"` // loopback address for /metrics
 	TLS               *ClientTLS `yaml:"tls,omitempty"`
 	Desync            *Desync    `yaml:"desync,omitempty"`
 	Shaping           Shaping    `yaml:"shaping,omitempty"`
@@ -85,6 +86,7 @@ type Server struct {
 	MTU               int        `yaml:"mtu"`
 	Keepalive         int        `yaml:"keepalive_interval,omitempty"`
 	SessionTimeout    int        `yaml:"session_timeout,omitempty"`
+	Metrics           string     `yaml:"metrics,omitempty"` // loopback address for /metrics
 	TLS               *ServerTLS `yaml:"tls,omitempty"`
 	Shaping           Shaping    `yaml:"shaping,omitempty"`
 	Debug             string     `yaml:"debug,omitempty"`
