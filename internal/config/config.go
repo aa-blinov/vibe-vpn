@@ -228,6 +228,9 @@ func (c *Client) Validate() error {
 	if err := validateTransport(c.Transport, c.TLS != nil); err != nil {
 		return err
 	}
+	if err := validateMetrics(c.Metrics); err != nil {
+		return err
+	}
 	if err := c.Shaping.Validate(); err != nil {
 		return err
 	}
@@ -263,8 +266,28 @@ func (s *Server) Validate() error {
 	if err := validateTransport(s.Transport, s.TLS != nil); err != nil {
 		return err
 	}
+	if err := validateMetrics(s.Metrics); err != nil {
+		return err
+	}
 	if err := s.Shaping.Validate(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateMetrics requires the metrics endpoint to be on a loopback address so
+// it is never exposed unintentionally.
+func validateMetrics(addr string) error {
+	if addr == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("metrics: address must be a loopback IP (e.g. 127.0.0.1:9090), got %q", addr)
 	}
 	return nil
 }

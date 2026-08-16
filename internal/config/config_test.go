@@ -128,3 +128,19 @@ func TestValidateTransport(t *testing.T) {
 		t.Fatal("tls transport without a tls section should fail")
 	}
 }
+
+func TestValidateMetrics(t *testing.T) {
+	if err := validateMetrics(""); err != nil {
+		t.Fatalf("empty address must be allowed: %v", err)
+	}
+	for _, ok := range []string{"127.0.0.1:9090", "[::1]:9090"} {
+		if err := validateMetrics(ok); err != nil {
+			t.Fatalf("%q should be allowed: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"0.0.0.0:9090", "192.168.1.5:9090", "no-port", "localhost:9090"} {
+		if err := validateMetrics(bad); err == nil {
+			t.Fatalf("%q should be rejected", bad)
+		}
+	}
+}
