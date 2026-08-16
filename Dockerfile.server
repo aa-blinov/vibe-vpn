@@ -1,0 +1,21 @@
+# Server image for the research VPN prototype.
+# Usage:
+#   docker build -f Dockerfile.server -t vibe-vpn-server .
+#   docker run --rm -it --device /dev/net/tun --cap-add NET_ADMIN \
+#     -p 4433:4433/udp \
+#     -v $PWD/configs/server.yaml:/etc/vibe-vpn/server.yaml:ro \
+#     vibe-vpn-server server --config /etc/vibe-vpn/server.yaml
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/vibe-vpn ./cmd/vibe-vpn
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 nftables iputils-ping ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/vibe-vpn /usr/local/bin/vibe-vpn
+VOLUME /etc/vibe-vpn
+ENTRYPOINT ["/usr/local/bin/vibe-vpn"]

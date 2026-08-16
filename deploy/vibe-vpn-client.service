@@ -1,0 +1,15 @@
+[Unit]
+Description=not-vpn client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@BIN@ client --config @CONFIG@
+Restart=always
+RestartSec=5
+# TUN creation and routing require privileges.
+AmbientCapabilities=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

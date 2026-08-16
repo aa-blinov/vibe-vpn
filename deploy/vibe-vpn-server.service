@@ -1,0 +1,15 @@
+[Unit]
+Description=not-vpn server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@BIN@ server --config @CONFIG@
+Restart=always
+RestartSec=5
+# TUN creation, routing and nftables require privileges.
+AmbientCapabilities=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

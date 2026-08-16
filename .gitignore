@@ -1,0 +1,5 @@
+# Build artifacts
+/bin/
+*.pcap
+server.yaml
+client.yaml

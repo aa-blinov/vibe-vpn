@@ -1,0 +1,36 @@
+# Example server configuration. Copy to server.yaml and fill in keys from
+# `vibe-vpn keygen`.
+server:
+  listen: 0.0.0.0:4433
+  # transport: raw   # udp (default) | tls | raw (obfs4-style, no TLS)
+  private_key: CHANGE_ME_SERVER_PRIVATE_KEY
+  interface: vpn0
+  subnet: 10.77.0.0/24
+  # Interface the server uses to reach the internet (used for the NAT rule).
+  outbound_interface: eth0
+  nat: true
+  # Optional client allowlist. When non-empty, only these client public keys
+  # may connect. A reconnecting client keeps the address of its previous
+  # session.
+  # peers:
+  #   - CHANGE_ME_CLIENT_PUBLIC_KEY
+  mtu: 1280
+  keepalive_interval: 20
+  session_timeout: 300
+  stats_interval: 15
+  # Wire-level traffic shaping (see README). The server's padding policy can
+  # differ from the client's: each side shapes its own sends.
+  shaping:
+    padding: bucket   # none | pad | bucket | random
+    bucket: 128
+    decoy_interval_s: 2
+  # Optional TLS transport (HTTPS camouflage). Generate a certificate with:
+  #   vibe-vpn certgen -out /etc/vibe-vpn/server -cn vpn.example.com
+  # The same port answers normal HTTPS clients with a real HTTP response, so
+  # only tunnel clients (ALPN vibe/1) get the VPN.
+  # tls:
+  #   listen: 0.0.0.0:443
+  #   cert: /etc/vibe-vpn/server.crt
+  #   key: /etc/vibe-vpn/server.key
+  # Writes a pcap of the plaintext tunnel traffic to /tmp/vibe-vpn-server.pcap.
+  # debug: /tmp/vibe-vpn-server
