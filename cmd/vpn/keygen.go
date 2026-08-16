@@ -14,7 +14,7 @@ func runKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ExitOnError)
 	encrypt := fs.Bool("encrypt", false, "encrypt the private key with a passphrase")
 	passphrase := fs.String("passphrase", "", "passphrase (falls back to VIBE_VPN_PASSPHRASE or a prompt)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	kp, err := crypto.GenerateKeypair()
 	if err != nil {

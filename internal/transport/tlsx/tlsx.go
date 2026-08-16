@@ -42,14 +42,12 @@ const (
 	// the TLS stream so the server can tell the tunnel from other HTTPS
 	// clients. It is only visible after TLS decryption.
 	tunnelMagic = "NVPN"
-
-	maxFrame = 65535
 )
 
 // LoadCertPool reads a PEM certificate bundle into a root pool for client-side
 // verification of the server certificate.
 func LoadCertPool(path string) (*x509.CertPool, error) {
-	pem, err := os.ReadFile(path)
+	pem, err := os.ReadFile(path) // #nosec G304 -- path comes from the operator's config
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +80,10 @@ func dialBrowser(addr, serverName string, roots *x509.CertPool, insecure bool, f
 		helloID = utls.HelloFirefox_Auto
 	}
 	cfg := &utls.Config{
-		ServerName:         serverName,
-		RootCAs:            roots,
+		ServerName: serverName,
+		RootCAs:    roots,
+		// #nosec G402 -- InsecureSkipVerify is an explicit, config-validated
+		// operator choice for prototypes without a pinned CA.
 		InsecureSkipVerify: insecure,
 		NextProtos:         []string{alpnHTTP},
 		MinVersion:         tls.VersionTLS12,
@@ -95,11 +95,11 @@ func dialBrowser(addr, serverName string, roots *x509.CertPool, insecure bool, f
 	}
 	uconn := utls.UClient(raw, cfg, helloID)
 	if err := uconn.Handshake(); err != nil {
-		raw.Close()
+		_ = raw.Close()
 		return nil, err
 	}
 	if _, err := uconn.Write([]byte(tunnelMagic)); err != nil {
-		uconn.Close()
+		_ = uconn.Close()
 		return nil, err
 	}
 	return framed.New(uconn), nil
@@ -109,8 +109,10 @@ func dialBrowser(addr, serverName string, roots *x509.CertPool, insecure bool, f
 // custom "vibe/1" ALPN.
 func dialLegacy(addr, serverName string, roots *x509.CertPool, insecure bool) (transport.Transport, error) {
 	cfg := &tls.Config{
-		ServerName:         serverName,
-		RootCAs:            roots,
+		ServerName: serverName,
+		RootCAs:    roots,
+		// #nosec G402 -- explicit, config-validated operator choice for
+		// prototypes without a pinned CA.
 		InsecureSkipVerify: insecure,
 		NextProtos:         []string{alpnTunnel},
 		MinVersion:         tls.VersionTLS12,
@@ -178,11 +180,11 @@ func (s *Server) acceptLoop() {
 func (s *Server) handleConn(raw net.Conn) {
 	tconn, ok := raw.(*tls.Conn)
 	if !ok {
-		raw.Close()
+		_ = raw.Close()
 		return
 	}
 	if err := tconn.Handshake(); err != nil {
-		raw.Close()
+		_ = raw.Close()
 		return
 	}
 	r := bufio.NewReader(tconn)
@@ -197,7 +199,7 @@ func (s *Server) handleConn(raw net.Conn) {
 	// identified by the magic sequence inside the encrypted stream.
 	magic := make([]byte, len(tunnelMagic))
 	if _, err := io.ReadFull(r, magic); err != nil {
-		raw.Close()
+		_ = raw.Close()
 		return
 	}
 	if string(magic) == tunnelMagic {
@@ -214,7 +216,7 @@ func (s *Server) acceptTunnel(tconn *tls.Conn, r *bufio.Reader) {
 	s.mu.Unlock()
 	t := framed.NewWithReader(tconn, r)
 	if fn == nil || !fn(t) {
-		t.Close()
+		_ = t.Close()
 	}
 }
 
@@ -222,7 +224,7 @@ func (s *Server) acceptTunnel(tconn *tls.Conn, r *bufio.Reader) {
 // regular HTTPS server for browsers and probes.
 func serveFakeHTTP(conn net.Conn, r *bufio.Reader) {
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 1024)
 	_, _ = r.Read(buf) // consume the request (or wait briefly for a probe)
 	body := "<html><body>It works.</body></html>"

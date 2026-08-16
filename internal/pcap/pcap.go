@@ -25,7 +25,7 @@ type Writer struct {
 
 // Open creates (or truncates) a pcap file and writes the global header.
 func Open(path string) (*Writer, error) {
-	f, err := os.Create(path)
+	f, err := os.Create(path) // #nosec G304 -- path comes from the operator's config
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func Open(path string) (*Writer, error) {
 	binary.LittleEndian.PutUint32(hdr[16:20], 65535)    // snaplen
 	binary.LittleEndian.PutUint32(hdr[20:24], dltRaw)   // linktype
 	if _, err := f.Write(hdr); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return w, nil
@@ -61,10 +61,12 @@ func (w *Writer) WritePacket(pkt []byte) {
 	ts := time.Now()
 	sec := ts.Unix()
 	usec := ts.Nanosecond() / 1000
+	// #nosec G115 -- timestamps fit uint32 until 2106; lengths are bounded below.
 	binary.LittleEndian.PutUint32(w.buf[0:4], uint32(sec))
-	binary.LittleEndian.PutUint32(w.buf[4:8], uint32(usec))
+	binary.LittleEndian.PutUint32(w.buf[4:8], uint32(usec)) // #nosec G115 -- microsecond fraction fits uint32
+	// #nosec G115 -- pkt was clamped to the buffer above (<= 65519 bytes).
 	binary.LittleEndian.PutUint32(w.buf[8:12], uint32(len(pkt)))
-	binary.LittleEndian.PutUint32(w.buf[12:16], uint32(len(pkt)))
+	binary.LittleEndian.PutUint32(w.buf[12:16], uint32(len(pkt))) // #nosec G115 -- same bound
 	copy(w.buf[16:], pkt)
 	if _, err := w.f.Write(w.buf[:16+len(pkt)]); err != nil {
 		w.err = err

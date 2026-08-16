@@ -30,17 +30,17 @@ func Open(name string, mtu int) (*Tun, error) {
 	}
 	ifr, err := unix.NewIfreq(name)
 	if err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, err
 	}
 	ifr.SetUint16(unix.IFF_TUN | unix.IFF_NO_PI)
 	if err := unix.IoctlIfreq(fd, unix.TUNSETIFF, ifr); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, fmt.Errorf("tun: TUNSETIFF %s: %w", name, err)
 	}
 	if mtu > 0 {
 		if err := setMTU(ifr.Name(), mtu); err != nil {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 			return nil, fmt.Errorf("tun: set mtu: %w", err)
 		}
 	}
@@ -52,12 +52,13 @@ func setMTU(name string, mtu int) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(s)
+	defer func() { _ = unix.Close(s) }()
 	ifr, err := unix.NewIfreq(name)
 	if err != nil {
 		return err
 	}
-	ifr.SetUint32(uint32(mtu))
+	ifr.SetUint32(uint32(mtu)) // #nosec G115 -- mtu is bounded by config validation
+
 	return unix.IoctlIfreq(s, unix.SIOCSIFMTU, ifr)
 }
 
@@ -93,7 +94,7 @@ func (t *Tun) WritePacket(b []byte) error {
 // Close releases the device.
 func (t *Tun) Close() error {
 	t.closeOnce.Do(func() {
-		unix.Close(t.fd)
+		_ = unix.Close(t.fd)
 	})
 	return nil
 }

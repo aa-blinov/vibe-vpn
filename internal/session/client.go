@@ -15,7 +15,12 @@ import (
 	"github.com/aa-blinov/vibe-vpn/internal/transport"
 )
 
-const reconnectBackoff = 2 * time.Second
+const (
+	reconnectBackoff = 2 * time.Second
+	// maxWireSeq is the largest wire sequence number before the uint32 field
+	// wraps; a rekey is forced below it.
+	maxWireSeq = uint64(1)<<32 - 1024
+)
 
 var errRekeyFailed = errors.New("session: rekey failed")
 
@@ -371,6 +376,7 @@ func (c *Client) handleFrame(data []byte, tun TUN) error {
 
 	case protocol.MsgKeepalive:
 		if len(f.Payload) == 8 {
+			// #nosec G115 -- a forged cookie only skews RTT and the result is clamped below.
 			sent := time.Unix(0, int64(binary.BigEndian.Uint64(f.Payload)))
 			if rtt := time.Since(sent); rtt > 0 && rtt < time.Minute {
 				c.stats.LastRTTNanos.Store(int64(rtt))
@@ -437,6 +443,11 @@ func (c *Client) sendDecoy() {
 }
 
 func (c *Client) maybeRekey() {
+	// Hard safety threshold: never let the uint32 wire sequence number wrap.
+	if c.keys != nil && c.keys.Seq() >= maxWireSeq {
+		c.startRekey()
+		return
+	}
 	if c.cfg.RekeyAfterPackets > 0 && c.keys != nil && c.keys.Seq() >= c.cfg.RekeyAfterPackets {
 		c.startRekey()
 		return
@@ -513,7 +524,7 @@ func (c *Client) teardownTransport() {
 	c.rekeying = false
 	c.rekeyHs = nil
 	if c.t != nil {
-		c.t.Close()
+		_ = c.t.Close()
 		c.t = nil
 	}
 	c.keys = nil
@@ -558,7 +569,7 @@ func (c *Client) sendClose() {
 // the reconnect path).
 func (c *Client) ForceTransportError() {
 	if c.t != nil {
-		c.t.Close()
+		_ = c.t.Close()
 	}
 }
 
@@ -572,6 +583,8 @@ func isIPv4(pkt []byte) bool {
 func cryptoRandInt(n int) int {
 	var b [8]byte
 	randRead(b[:])
+	// #nosec G115 -- a random value is reduced modulo n; signedness does not
+	// affect uniformity.
 	v := int64(binary.BigEndian.Uint64(b[:]))
 	if v < 0 {
 		v = -v

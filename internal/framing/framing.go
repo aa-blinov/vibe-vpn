@@ -20,7 +20,6 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
-	"math/rand"
 	"time"
 )
 
@@ -58,12 +57,12 @@ type Frame struct {
 // freshly allocated.
 func Seal(aead cipher.AEAD, tag [4]byte, typ byte, seq uint32, payload, padding []byte) []byte {
 	nonce := make([]byte, NonceLen)
-	crand.Read(nonce)
+	_, _ = crand.Read(nonce) // crypto/rand.Read never returns an error
 	inner := make([]byte, InnerHeaderLen+len(payload)+len(padding))
 	copy(inner[0:4], tag[:])
 	inner[4] = typ
 	binary.BigEndian.PutUint32(inner[5:9], seq)
-	binary.BigEndian.PutUint16(inner[9:11], uint16(len(payload)))
+	binary.BigEndian.PutUint16(inner[9:11], uint16(len(payload))) // #nosec G115 -- payload <= MaxPayload
 	copy(inner[InnerHeaderLen:], payload)
 	copy(inner[InnerHeaderLen+len(payload):], padding)
 	ct := aead.Seal(nil, nonce, inner, nil)
@@ -142,7 +141,7 @@ func (s Shaping) PaddingFor(innerLen int) int {
 		}
 	case "random":
 		if s.RandMax > 0 {
-			return rand.Intn(s.RandMax + 1)
+			return randN(s.RandMax + 1)
 		}
 	case "web":
 		// Pad each frame to a wire size sampled from the distribution of real
@@ -153,7 +152,7 @@ func (s Shaping) PaddingFor(innerLen int) int {
 		if target := webWireSize(); target > min && target <= MaxWire {
 			return target - min
 		}
-		return rand.Intn(17)
+		return randN(17)
 	}
 	return 0
 }
@@ -161,18 +160,30 @@ func (s Shaping) PaddingFor(innerLen int) int {
 // webWireSize samples a plausible TLS-record wire size (typical HTTPS
 // traffic): mostly small records, a few medium, rare large ones.
 func webWireSize() int {
-	switch r := rand.Float64(); {
-	case r < 0.35:
-		return 53 + rand.Intn(97) // 53..149
-	case r < 0.65:
-		return 150 + rand.Intn(250) // 150..399
-	case r < 0.85:
-		return 400 + rand.Intn(400) // 400..799
-	case r < 0.95:
-		return 800 + rand.Intn(400) // 800..1199
+	switch r := randN(100); {
+	case r < 35:
+		return 53 + randN(97) // 53..149
+	case r < 65:
+		return 150 + randN(250) // 150..399
+	case r < 85:
+		return 400 + randN(400) // 400..799
+	case r < 95:
+		return 800 + randN(400) // 800..1199
 	default:
-		return 1200 + rand.Intn(300) // 1200..1499
+		return 1200 + randN(300) // 1200..1499
 	}
+}
+
+// randN returns a cryptographically random integer in [0, max). Traffic
+// shaping uses it so even packet-size randomness does not leak through a weak
+// PRNG.
+func randN(max int) int {
+	if max <= 0 {
+		return 0
+	}
+	var b [4]byte
+	_, _ = crand.Read(b[:]) // crypto/rand.Read never returns an error
+	return int(uint32(b[0])<<24|uint32(b[1])<<16|uint32(b[2])<<8|uint32(b[3])) % max
 }
 
 // WireLen returns the resulting wire size for an inner plaintext of innerLen.

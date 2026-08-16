@@ -40,7 +40,7 @@ func runClient(args []string) error {
 	cDesync := fs.Bool("desync", false, "auto-setup: enable nfqws desync")
 	cNfqws := fs.String("nfqws", "/usr/local/bin/nfqws", "auto-setup: path to nfqws")
 	cOut := fs.String("out", "./vibe-vpn-client", "auto-setup: output directory")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *cfgPath == "" {
 		// One-command mode: generate everything, then run.

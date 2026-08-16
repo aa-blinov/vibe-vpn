@@ -41,7 +41,7 @@ func setupServerCmd(args []string) error {
 	listen := fs.String("listen", "0.0.0.0:4433", "UDP listen (unused with TLS)")
 	subnet := fs.String("subnet", "10.77.0.0/24", "tunnel subnet")
 	iface := fs.String("interface", "vpn0", "server tun interface")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	path, err := setupServerDir(*out, *domain, *tlsListen, *listen, *subnet, *iface)
 	if err != nil {
@@ -61,7 +61,7 @@ func setupClientCmd(args []string) error {
 	peer := fs.String("peer", "", "peer directory copied from server setup")
 	desync := fs.Bool("desync", false, "enable nfqws desync")
 	desyncBin := fs.String("nfqws", "/usr/local/bin/nfqws", "path to the nfqws binary")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	path, err := setupClientDir(*out, *serverAddr, *peer, *desync, *desyncBin)
 	if err != nil {
@@ -78,7 +78,7 @@ func setupServerDir(out, domain, tlsListen, listen, subnet, iface string) (strin
 	if domain == "" {
 		return "", fmt.Errorf("-domain is required (DNS name or IP of the server)")
 	}
-	if err := os.MkdirAll(out, 0o755); err != nil {
+	if err := os.MkdirAll(out, 0o700); err != nil {
 		return "", err
 	}
 	kp, err := crypto.GenerateKeypair()
@@ -141,7 +141,7 @@ func setupClientDir(out, serverAddr, peer string, desync bool, nfqws string) (st
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(out, 0o755); err != nil {
+	if err := os.MkdirAll(out, 0o700); err != nil {
 		return "", err
 	}
 	kp, err := crypto.GenerateKeypair()
@@ -181,7 +181,7 @@ func setupClientDir(out, serverAddr, peer string, desync bool, nfqws string) (st
 }
 
 func readPeer(dir string) (domain, pubKey string, err error) {
-	raw, err := os.ReadFile(filepath.Join(dir, "peer.txt"))
+	raw, err := os.ReadFile(filepath.Join(dir, "peer.txt")) // #nosec G304 -- operator-supplied peer directory
 	if err != nil {
 		return "", "", fmt.Errorf("peer: %w", err)
 	}

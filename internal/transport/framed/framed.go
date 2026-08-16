@@ -41,7 +41,8 @@ func (c *Conn) Send(b []byte) error {
 		return ErrTooLarge
 	}
 	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(b)))
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(b))) // #nosec G115 -- len(b) <= MaxFrame
+
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	if _, err := c.conn.Write(hdr[:]); err != nil {

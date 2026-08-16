@@ -57,6 +57,7 @@ func (w *ReplayWindow) Add(seq uint64) {
 		w.high = seq
 		return
 	}
+	// #nosec G115 -- slide < size (checked above) and the bitmap is small.
 	shiftUp(w.bits, int(slide))
 	w.bits[0] |= 1
 	w.high = seq

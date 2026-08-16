@@ -121,7 +121,7 @@ type File struct {
 
 // Load reads a YAML file, unmarshals it and fills in defaults.
 func Load(path string) (*File, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) // #nosec G304 -- path comes from the operator
 	if err != nil {
 		return nil, err
 	}

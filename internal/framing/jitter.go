@@ -1,7 +1,6 @@
 package framing
 
 import (
-	"math/rand"
 	"time"
 
 	"github.com/aa-blinov/vibe-vpn/internal/transport"
@@ -24,7 +23,7 @@ type jitterTransport struct {
 
 func (j *jitterTransport) Send(b []byte) error {
 	if j.max > 0 {
-		time.Sleep(time.Duration(rand.Int63n(int64(j.max))))
+		time.Sleep(time.Duration(randN(int(j.max))))
 	}
 	return j.t.Send(b)
 }

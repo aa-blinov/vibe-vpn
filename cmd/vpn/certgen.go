@@ -13,13 +13,13 @@ func runCertgen(args []string) error {
 	out := fs.String("out", "server", "output prefix (writes <out>.crt and <out>.key)")
 	cn := fs.String("cn", "localhost", "certificate common name (DNS name or IP address)")
 	days := fs.Int("days", 825, "validity in days")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	certPEM, keyPEM, err := tlsx.GenerateSelfSigned(*cn, *days)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(*out+".crt", certPEM, 0o644); err != nil {
+	if err := os.WriteFile(*out+".crt", certPEM, 0o600); err != nil {
 		return err
 	}
 	if err := os.WriteFile(*out+".key", keyPEM, 0o600); err != nil {

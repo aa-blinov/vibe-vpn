@@ -13,6 +13,8 @@ import (
 )
 
 func run(args ...string) error {
+	// #nosec G204 -- commands are fixed binaries (ip/nft/sysctl) with arguments
+	// derived from the operator's own config, not from untrusted input.
 	cmd := exec.Command(args[0], args[1:]...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -85,7 +87,7 @@ func SetupClientTUN(name string, clientIP net.IP, prefix int, gw net.IP, serverA
 
 // routeTo resolves the next hop for a destination using "ip route get".
 func routeTo(dst string) (via, dev string, err error) {
-	out, err := exec.Command("ip", "route", "get", dst).Output()
+	out, err := exec.Command("ip", "route", "get", dst).Output() // #nosec G204 -- dst is the operator-configured server address
 	if err != nil {
 		return "", "", err
 	}

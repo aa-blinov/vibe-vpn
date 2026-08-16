@@ -10,9 +10,8 @@ package session
 
 import (
 	"crypto/cipher"
-	crand "crypto/rand"
+	"encoding/binary"
 	"errors"
-	mrand "math/rand"
 	"net"
 	"time"
 
@@ -77,6 +76,8 @@ func aeadFrom(cs *noise.CipherState) cipher.AEAD {
 // seal encrypts a message and returns the wire bytes and the sequence number
 // that was consumed.
 func (k *Keys) seal(tag [4]byte, typ byte, payload, padding []byte) ([]byte, uint32) {
+	// #nosec G115 -- the caller forces a rekey long before the uint32 wire
+	// sequence number can wrap (see maybeRekey's hard threshold).
 	seq := uint32(k.sendSeq)
 	k.sendSeq++
 	return framing.Seal(k.sendAEAD, tag, typ, seq, payload, padding), seq
@@ -105,7 +106,7 @@ func (k *Keys) Seq() uint64 { return k.sendSeq }
 // randomTag returns a fresh opaque session tag.
 func randomTag() [4]byte {
 	var t [4]byte
-	crand.Read(t[:])
+	randRead(t[:])
 	return t
 }
 
@@ -116,22 +117,30 @@ func decoyJitter(base time.Duration) time.Duration {
 		return base
 	}
 	half := base / 2
-	return half + time.Duration(mrand.Int63n(int64(base)))
+	return half + time.Duration(crandInt63n(int64(base)))
 }
 
 // makePadding returns n random bytes (n <= 0 yields nil).
+// crandInt63n returns a cryptographically random value in [0, n).
+func crandInt63n(n int64) int64 {
+	var b [8]byte
+	randRead(b[:])
+	// #nosec G115 -- a random value reduced modulo n; sign is irrelevant.
+	return int64(binary.BigEndian.Uint64(b[:])) % n
+}
+
 func makePadding(n int) []byte {
 	if n <= 0 {
 		return nil
 	}
 	b := make([]byte, n)
-	crand.Read(b)
+	randRead(b)
 	return b
 }
 
 func assignPayload(prefix int, ip, gw net.IP) []byte {
 	b := make([]byte, 9)
-	b[0] = byte(prefix)
+	b[0] = byte(prefix) // #nosec G115 -- prefix is the subnet mask bit count (<= 32)
 	copy(b[1:5], ip.To4())
 	copy(b[5:9], gw.To4())
 	return b

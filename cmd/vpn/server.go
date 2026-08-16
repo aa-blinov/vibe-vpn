@@ -37,7 +37,7 @@ func runServer(args []string) error {
 	sSubnet := fs.String("subnet", "10.77.0.0/24", "auto-setup: tunnel subnet")
 	sIface := fs.String("interface", "vpn0", "auto-setup: server tun interface")
 	sOut := fs.String("out", "./vibe-vpn-server", "auto-setup: output directory")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *cfgPath == "" {
 		// One-command mode: generate everything, then run.

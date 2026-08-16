@@ -37,7 +37,13 @@ func Serve(addr string, snap Snapshot) (*Server, error) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		write(w, snap)
 	})
-	s := &Server{ln: ln, s: &http.Server{Handler: mux}}
+	s := &Server{ln: ln, s: &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}}
 	go s.s.Serve(ln)
 	return s, nil
 }

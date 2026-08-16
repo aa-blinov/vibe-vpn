@@ -60,6 +60,7 @@ func Start(cfg Config, dport int, log io.Writer) (*Manager, error) {
 
 func (m *Manager) setupNft() error {
 	nft := func(args ...string) error {
+		// #nosec G204 -- fixed "nft" binary with config-derived arguments.
 		cmd := exec.Command("nft", args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("nft %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -81,7 +82,7 @@ func (m *Manager) setupNft() error {
 
 func (m *Manager) nfqwsCmd(log io.Writer) (*exec.Cmd, error) {
 	args := buildNFQWSArgs(m.dport, m.cfg.Queue, m.cfg.DPIDesync, m.cfg.SplitPos, m.cfg.Fooling)
-	cmd := exec.Command(m.cfg.NFQWS, args...)
+	cmd := exec.Command(m.cfg.NFQWS, args...) // #nosec G204 -- operator-configured binary
 	if log != nil {
 		cmd.Stdout = log
 		cmd.Stderr = log

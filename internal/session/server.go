@@ -425,7 +425,7 @@ func (s *serverSession) transportReader(ch chan recvResult) {
 
 func (s *serverSession) finish() {
 	s.mgr.remove(s)
-	s.t.Close()
+	_ = s.t.Close()
 	s.sendCloseQuiet()
 	if s.mgr.cfg.Log != nil {
 		s.mgr.cfg.Log.Printf("session %d closed (%s)", s.sid, s.stats.Dump("server"))
@@ -692,6 +692,7 @@ func (p *ipPool) alloc(preferred net.IP) (net.IP, error) {
 		copy(cand, base)
 		ipu := uint32(cand[0])<<24 | uint32(cand[1])<<16 | uint32(cand[2])<<8 | uint32(cand[3])
 		ipu += uint32(i)
+		// #nosec G115 -- each byte is a masked octet of a uint32 IPv4 address.
 		cand = net.IPv4(byte(ipu>>24), byte(ipu>>16), byte(ipu>>8), byte(ipu)).To4()
 		k := [4]byte(cand)
 		if k == p.gateway {

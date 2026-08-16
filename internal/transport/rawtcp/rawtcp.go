@@ -78,6 +78,6 @@ func (s *Server) handleConn(conn net.Conn) {
 	s.mu.Unlock()
 	t := framed.New(conn)
 	if fn == nil || !fn(t) {
-		t.Close()
+		_ = t.Close()
 	}
 }
