@@ -10,7 +10,6 @@ package integration
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,6 +127,15 @@ func repoRoot(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(dir))
 }
 
+// readLog returns the contents of a log file (from the start).
+func readLog(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "(no log: " + err.Error() + ")"
+	}
+	return string(b)
+}
+
 func writeConfig(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -142,9 +150,21 @@ func genKeys(t *testing.T, bin string) (priv, pub string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	priv = strings.Fields(lines[0])[1]
-	pub = strings.Fields(lines[1])[1]
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		switch fields[0] {
+		case "private_key:":
+			priv = fields[1]
+		case "public_key:":
+			pub = fields[1]
+		}
+	}
+	if priv == "" || pub == "" {
+		t.Fatalf("keygen output missing keys:\n%s", out)
+	}
 	return
 }
 
@@ -228,7 +248,7 @@ func TestTunnelPing(t *testing.T) {
 	// Give the server a moment and check it is still alive.
 	time.Sleep(500 * time.Millisecond)
 	if err := srv.Process.Signal(os.Signal(syscall.Signal(0))); err != nil {
-		sbuf, _ := io.ReadAll(srvOut)
+		sbuf := readLog(srvOut.Name())
 		t.Fatalf("server died on startup:\n%s", sbuf)
 	}
 
@@ -255,8 +275,8 @@ func TestTunnelPing(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			cbuf, _ := io.ReadAll(cliOut)
-			sbuf, _ := io.ReadAll(srvOut)
+			cbuf := readLog(cliOut.Name())
+			sbuf := readLog(srvOut.Name())
 			t.Fatalf("tunnel never came up;\nclient log:\n%s\nserver log:\n%s", cbuf, sbuf)
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -266,7 +286,7 @@ func TestTunnelPing(t *testing.T) {
 	out, err := exec.Command("ip", "netns", "exec", netnsName,
 		"ping", "-c", "3", "-W", "2", "10.77.0.1").CombinedOutput()
 	if err != nil {
-		buf, _ := io.ReadAll(cliOut)
+		buf := readLog(cliOut.Name())
 		t.Fatalf("ping failed: %v\n%s\nclient log:\n%s", err, out, buf)
 	}
 	if !strings.Contains(string(out), "0% packet loss") {

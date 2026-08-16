@@ -20,9 +20,9 @@ func runKeygen(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("public_key: %s\n", crypto.EncodeKey(kp.Public))
 	if !*encrypt {
 		fmt.Printf("private_key: %s\n", crypto.EncodeKey(kp.Private))
+		fmt.Printf("public_key:  %s\n", crypto.EncodeKey(kp.Public))
 		return nil
 	}
 	pass := *passphrase
@@ -42,6 +42,7 @@ func runKeygen(args []string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("public_key:  %s\n", crypto.EncodeKey(kp.Public))
 	fmt.Printf("private_key_encrypted: %s\n", blob)
 	return nil
 }
