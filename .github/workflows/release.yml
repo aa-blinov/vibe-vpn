@@ -21,6 +21,11 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
+      - name: Fuzz gate (short)
+        run: |
+          go test ./internal/framing/ -run '^$$' -fuzz FuzzSealOpen -fuzztime 60s
+          go test ./internal/protocol/ -run '^$$' -fuzz FuzzReplayWindow -fuzztime 60s
+          go test ./internal/ippkt/ -run '^$$' -fuzz FuzzParse -fuzztime 60s
       - name: Build and package
         run: |
           set -euo pipefail
