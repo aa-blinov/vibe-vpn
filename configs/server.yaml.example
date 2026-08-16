@@ -4,6 +4,7 @@ server:
   listen: 0.0.0.0:4433
   # transport: raw   # udp (default) | tls | raw (obfs4-style, no TLS)
   private_key: CHANGE_ME_SERVER_PRIVATE_KEY
+  # private_key_encrypted: <blob from `vibe-vpn keygen -encrypt`>  # passphrase-protected
   interface: vpn0
   subnet: 10.77.0.0/24
   # Interface the server uses to reach the internet (used for the NAT rule).

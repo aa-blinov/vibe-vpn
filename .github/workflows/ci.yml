@@ -26,6 +26,22 @@ jobs:
       - name: coverage
         run: go test -count=1 -cover ./internal/...
 
+  fuzz:
+    name: fuzz (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: fuzz framing
+        run: go test ./internal/framing/ -run '^$$' -fuzz FuzzSealOpen -fuzztime 30s
+      - name: fuzz replay window
+        run: go test ./internal/protocol/ -run '^$$' -fuzz FuzzReplayWindow -fuzztime 30s
+      - name: fuzz ipv4 parse
+        run: go test ./internal/ippkt/ -run '^$$' -fuzz FuzzParse -fuzztime 30s
+
   integration:
     name: integration (TUN)
     runs-on: ubuntu-latest

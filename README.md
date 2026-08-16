@@ -629,8 +629,8 @@ can be wrapped around any `Transport` implementation.
 ### What it is not
 
 - This is a **research prototype**, not an audited production VPN. It has not
-  been through a formal security review, and key material is stored on disk in
-  plaintext (files are created `0600`).
+  been through a formal security review. Keys are stored on disk `0600`; use
+  `vibe-vpn keygen -encrypt` to protect a key at rest with a passphrase.
 - The obfuscation layer (encrypted metadata, padding profiles, browser TLS
   fingerprint, cover traffic) raises the cost of passive traffic
   classification but is **not a guarantee of undetectability**. Any fixed

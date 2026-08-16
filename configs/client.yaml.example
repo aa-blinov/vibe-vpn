@@ -4,6 +4,7 @@ client:
   server: SERVER_PUBLIC_IP:4433
   # transport: raw   # udp (default) | tls | raw (obfs4-style, no TLS)
   private_key: CHANGE_ME_CLIENT_PRIVATE_KEY
+  # private_key_encrypted: <blob from `vibe-vpn keygen -encrypt`>  # passphrase-protected
   server_public_key: CHANGE_ME_SERVER_PUBLIC_KEY
   mtu: 1280
   # Optional: request a specific address inside the server subnet.

@@ -22,23 +22,24 @@ const (
 
 // Client is the client side configuration.
 type Client struct {
-	Server            string     `yaml:"server"`
-	Transport         string     `yaml:"transport,omitempty"` // udp | tls | raw
-	PrivateKey        string     `yaml:"private_key"`
-	ServerPublicKey   string     `yaml:"server_public_key"`
-	MTU               int        `yaml:"mtu"`
-	ClientIP          string     `yaml:"client_ip,omitempty"`
-	Keepalive         int        `yaml:"keepalive_interval,omitempty"`
-	SessionTimeout    int        `yaml:"session_timeout,omitempty"`
-	RekeyAfterPackets uint64     `yaml:"rekey_after_packets,omitempty"`
-	RekeyAfterSeconds int        `yaml:"rekey_after_seconds,omitempty"`
-	SetupRouting      bool       `yaml:"setup_routing"`
-	Metrics           string     `yaml:"metrics,omitempty"` // loopback address for /metrics
-	TLS               *ClientTLS `yaml:"tls,omitempty"`
-	Desync            *Desync    `yaml:"desync,omitempty"`
-	Shaping           Shaping    `yaml:"shaping,omitempty"`
-	Debug             string     `yaml:"debug,omitempty"`
-	StatsInterval     int        `yaml:"stats_interval,omitempty"`
+	Server              string     `yaml:"server"`
+	Transport           string     `yaml:"transport,omitempty"` // udp | tls | raw
+	PrivateKey          string     `yaml:"private_key"`
+	PrivateKeyEncrypted string     `yaml:"private_key_encrypted,omitempty"` // passphrase-protected key blob
+	ServerPublicKey     string     `yaml:"server_public_key"`
+	MTU                 int        `yaml:"mtu"`
+	ClientIP            string     `yaml:"client_ip,omitempty"`
+	Keepalive           int        `yaml:"keepalive_interval,omitempty"`
+	SessionTimeout      int        `yaml:"session_timeout,omitempty"`
+	RekeyAfterPackets   uint64     `yaml:"rekey_after_packets,omitempty"`
+	RekeyAfterSeconds   int        `yaml:"rekey_after_seconds,omitempty"`
+	SetupRouting        bool       `yaml:"setup_routing"`
+	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
+	TLS                 *ClientTLS `yaml:"tls,omitempty"`
+	Desync              *Desync    `yaml:"desync,omitempty"`
+	Shaping             Shaping    `yaml:"shaping,omitempty"`
+	Debug               string     `yaml:"debug,omitempty"`
+	StatsInterval       int        `yaml:"stats_interval,omitempty"`
 }
 
 // Desync configures the nfqws-based DPI desynchronization of the tunnel's own
@@ -75,22 +76,23 @@ type ClientTLS struct {
 
 // Server is the server side configuration.
 type Server struct {
-	Listen            string     `yaml:"listen"`
-	Transport         string     `yaml:"transport,omitempty"` // udp | tls | raw
-	PrivateKey        string     `yaml:"private_key"`
-	Interface         string     `yaml:"interface"`
-	Subnet            string     `yaml:"subnet"`
-	OutboundInterface string     `yaml:"outbound_interface,omitempty"`
-	NAT               bool       `yaml:"nat"`
-	Peers             []string   `yaml:"peers,omitempty"`
-	MTU               int        `yaml:"mtu"`
-	Keepalive         int        `yaml:"keepalive_interval,omitempty"`
-	SessionTimeout    int        `yaml:"session_timeout,omitempty"`
-	Metrics           string     `yaml:"metrics,omitempty"` // loopback address for /metrics
-	TLS               *ServerTLS `yaml:"tls,omitempty"`
-	Shaping           Shaping    `yaml:"shaping,omitempty"`
-	Debug             string     `yaml:"debug,omitempty"`
-	StatsInterval     int        `yaml:"stats_interval,omitempty"`
+	Listen              string     `yaml:"listen"`
+	Transport           string     `yaml:"transport,omitempty"` // udp | tls | raw
+	PrivateKey          string     `yaml:"private_key"`
+	PrivateKeyEncrypted string     `yaml:"private_key_encrypted,omitempty"` // passphrase-protected key blob
+	Interface           string     `yaml:"interface"`
+	Subnet              string     `yaml:"subnet"`
+	OutboundInterface   string     `yaml:"outbound_interface,omitempty"`
+	NAT                 bool       `yaml:"nat"`
+	Peers               []string   `yaml:"peers,omitempty"`
+	MTU                 int        `yaml:"mtu"`
+	Keepalive           int        `yaml:"keepalive_interval,omitempty"`
+	SessionTimeout      int        `yaml:"session_timeout,omitempty"`
+	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
+	TLS                 *ServerTLS `yaml:"tls,omitempty"`
+	Shaping             Shaping    `yaml:"shaping,omitempty"`
+	Debug               string     `yaml:"debug,omitempty"`
+	StatsInterval       int        `yaml:"stats_interval,omitempty"`
 }
 
 // ServerTLS configures the TLS transport on the server.
@@ -200,8 +202,8 @@ func (c *Client) Validate() error {
 	if _, _, err := net.SplitHostPort(c.Server); err != nil {
 		return fmt.Errorf("client: server %q: %w", c.Server, err)
 	}
-	if c.PrivateKey == "" {
-		return errors.New("client: private_key is required")
+	if (c.PrivateKey == "") == (c.PrivateKeyEncrypted == "") {
+		return errors.New("client: exactly one of private_key or private_key_encrypted is required")
 	}
 	if c.ServerPublicKey == "" {
 		return errors.New("client: server_public_key is required")
@@ -234,8 +236,8 @@ func (c *Client) Validate() error {
 
 // Validate checks the server configuration for obvious problems.
 func (s *Server) Validate() error {
-	if s.PrivateKey == "" {
-		return errors.New("server: private_key is required")
+	if (s.PrivateKey == "") == (s.PrivateKeyEncrypted == "") {
+		return errors.New("server: exactly one of private_key or private_key_encrypted is required")
 	}
 	if _, _, err := net.ParseCIDR(s.Subnet); err != nil {
 		return fmt.Errorf("server: subnet %q: %w", s.Subnet, err)

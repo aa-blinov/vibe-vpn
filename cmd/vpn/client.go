@@ -67,9 +67,9 @@ func runClient(args []string) error {
 	}
 
 	logger := log.New(os.Stderr, "vibe-vpn-client ", log.LstdFlags)
-	priv, err := crypto.DecodeKey(cc.PrivateKey)
+	priv, err := loadPrivateKey(cc.PrivateKey, cc.PrivateKeyEncrypted)
 	if err != nil {
-		return fmt.Errorf("private_key: %w", err)
+		return fmt.Errorf("private key: %w", err)
 	}
 	kp, err := crypto.KeypairFromPrivate(priv)
 	if err != nil {

@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	noise "github.com/flynn/noise"
@@ -143,5 +144,42 @@ func TestKeypairFromPrivate(t *testing.T) {
 	}
 	if _, err := DecodeKey("tooshort"); err == nil {
 		t.Fatal("decoding a short key should fail")
+	}
+}
+
+func TestKeyEncryptionRoundtrip(t *testing.T) {
+	kp, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := EncryptKey(kp.Private, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(blob, "v1:") {
+		t.Fatalf("blob missing prefix: %q", blob)
+	}
+	got, err := DecryptKey(blob, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, kp.Private) {
+		t.Fatal("decrypted key does not match")
+	}
+
+	// Wrong passphrase must fail.
+	if _, err := DecryptKey(blob, "wrong"); err == nil {
+		t.Fatal("expected failure with a wrong passphrase")
+	}
+	// Malformed blobs must fail.
+	if _, err := DecryptKey("not-a-blob", "x"); err == nil {
+		t.Fatal("expected failure for a malformed blob")
+	}
+	if _, err := DecryptKey("v1:abc", "x"); err == nil {
+		t.Fatal("expected failure for a truncated blob")
+	}
+	// Empty passphrase rejected at encrypt time.
+	if _, err := EncryptKey(kp.Private, ""); err == nil {
+		t.Fatal("expected failure for an empty passphrase")
 	}
 }
