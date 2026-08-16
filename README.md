@@ -18,25 +18,28 @@ Noise Protocol Framework (`Noise_XK_25519_ChaChaPoly_SHA256`):
 ## Architecture
 
 ```
- TUN interface                    TUN interface
-      │                                ▲
-      ▼                                │
- ┌─────────┐   session layer:     ┌─────────┐
- │  client │   handshake (Noise)  │  server │
- │ session │   keys, seq numbers, │ session │
- │   ┌──────────────┐   replay window,    │
- │   │   keys       │   keepalive, rekey, │
- │   │  (send/recv) │   timeout,          │
- │   └──────────────┘   reconnect         │
- │      │                                │
- │      ▼                                │
- │  framing + AEAD  ◄─── UDP ────►  framing + AEAD
- └─────────┐                                ▲
-           │                                │
-      transport.Transport            transport.Transport
-           │                                │
-           ▼                                ▼
-          network                        network
+ TUN interface                             TUN interface
+      │                                         ▲
+      ▼                                         │
+ ┌──────────────┐  session layer:       ┌──────────────┐
+ │  client      │  handshake (Noise XK) │  server      │
+ │  session     │  keys, sequence       │  session     │
+ │              │  numbers, replay      │              │
+ │  keys        │  window, keepalive,   │  keys        │
+ │  (send/recv) │  rekey, reconnect     │  (send/recv) │
+ └──────┬───────┘                       └──────┬───────┘
+        │                                     │
+        ▼                                     ▼
+   framing + AEAD                       framing + AEAD
+        │                                     │
+        ▼                                     ▼
+ ┌─────────────────────────────────────────────────────┐
+ │                pluggable transports                 │
+ │           udp   |   tls   |   raw                   │
+ └─────────────────────────────────────────────────────┘
+        │                                     │
+        ▼                                     ▼
+        network                             network
 ```
 
 The single most important boundary is the transport interface
