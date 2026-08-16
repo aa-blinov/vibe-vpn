@@ -603,15 +603,42 @@ can be wrapped around any `Transport` implementation.
 - **"permission denied" opening `/dev/net/tun`** — run as root; in a container
   pass `--device /dev/net/tun --cap-add NET_ADMIN`.
 
-## Security notes
+## Security
 
-This is a **research prototype**, not a production VPN. The obfuscated framing
-removes the obvious plaintext signatures and normalizes packet sizes, but it is
-**not** a guarantee of undetectability: any fixed protocol can eventually be
-fingerprinted by a determined active analyser, and real-world anti-censorship
-tools are iterated continuously. Evaluate resistance to passive traffic
-classification in a lab, not against a live network. Things this prototype does
-not do: key-storage hardening, DDoS defence beyond dropping malformed
-pre-handshake traffic, formal protocol review, or defence against active
-probing. Use standard, audited tooling (e.g. WireGuard) for anything
-sensitive.
+### What the protocol provides
+
+- **Confidentiality and integrity** for all tunnel traffic. The Noise XK
+  handshake (X25519, ChaCha20-Poly1305, SHA-256) establishes transport keys,
+  and every session frame is authenticated with per-frame AEAD and a fresh
+  random nonce. No custom cryptography is used.
+- **Authenticated peers.** The client pins the server's static public key; the
+  server can enforce a `peers` allowlist. A rekey re-authenticates the same
+  peer inside the session.
+- **Replay protection.** An RFC 6479-style sliding window rejects replays while
+  tolerating out-of-order delivery.
+- **Forward secrecy.** Every handshake — initial and rekey — uses fresh
+  ephemeral keys, so past sessions are not recoverable from a later key
+  compromise.
+- **Defensive input handling.** Frames that fail framing, handshake
+  authentication, AEAD or the replay window are dropped and counted; garbage
+  before a handshake closes the connection immediately.
+
+### What it is not
+
+- This is a **research prototype**, not an audited production VPN. It has not
+  been through a formal security review, and key material is stored on disk in
+  plaintext (files are created `0600`).
+- The obfuscation layer (encrypted metadata, padding profiles, browser TLS
+  fingerprint, cover traffic) raises the cost of passive traffic
+  classification but is **not a guarantee of undetectability**. Any fixed
+  protocol can eventually be fingerprinted by a determined active analyser;
+  treat resistance to DPI as something to measure per deployment, in a lab,
+  not as an absolute property.
+- There is no DDoS defence beyond dropping malformed pre-handshake traffic,
+  and no defence against active probing of the server endpoint.
+
+### Using it responsibly
+
+Deploy it on infrastructure you control and be aware of the laws of the
+jurisdiction where you operate it. For needs that require audited, supported
+software, use an established VPN implementation (e.g. WireGuard).
