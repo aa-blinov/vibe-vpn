@@ -26,7 +26,8 @@ func Serve(path string, status func() string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The status socket is read-only and local; make it queryable by any user.
+	// #nosec G302 -- a read-only status socket must be queryable by any local
+	// user; it exposes no secrets.
 	_ = os.Chmod(path, 0o666)
 	s := &Server{ln: ln, path: path, status: status}
 	go s.acceptLoop()
@@ -61,7 +62,7 @@ func Query(path string) (string, error) {
 		return "", err
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	if _, err := io.WriteString(conn, "status\n"); err != nil {
 		return "", err
 	}

@@ -103,6 +103,7 @@ func DecryptKey(blob, passphrase string) ([]byte, error) {
 func MakeCookie(secret, clientIP []byte, window int64) [32]byte {
 	h := hmac.New(sha256.New, secret)
 	var w [8]byte
+	// #nosec G115 -- window is a positive Unix time bucket.
 	binary.BigEndian.PutUint64(w[:], uint64(window))
 	h.Write(w[:])
 	h.Write(clientIP)
