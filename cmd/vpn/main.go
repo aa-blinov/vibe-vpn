@@ -48,6 +48,8 @@ func main() {
 		err = runCertgen(os.Args[2:])
 	case "setup":
 		err = runSetup(os.Args[2:])
+	case "status":
+		err = runStatus(os.Args[2:])
 	case "version", "--version", "-V":
 		fmt.Printf("vibe-vpn %s\n", version)
 		return

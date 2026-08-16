@@ -891,3 +891,40 @@ func TestRTTBuckets(t *testing.T) {
 		}
 	}
 }
+
+// TestCookieRateLimit verifies the anti-DoS handshake cookie mechanism.
+func TestCookieRateLimit(t *testing.T) {
+	kp := testKeypair(t)
+	mgr, err := NewManager(ServerConfig{Keypair: kp, Subnet: testSubnet(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := []byte("203.0.113.7")
+
+	// The first handshakeRateLimit calls are not rate-limited.
+	for i := 0; i < handshakeRateLimit; i++ {
+		if mgr.requireCookie(string(ip)) {
+			t.Fatalf("handshake %d should not require a cookie", i)
+		}
+	}
+	if !mgr.requireCookie(string(ip)) {
+		t.Fatal("handshake past the limit should require a cookie")
+	}
+
+	// A different IP is independent.
+	if mgr.requireCookie("198.51.100.9") {
+		t.Fatal("a fresh IP must not be rate-limited")
+	}
+
+	// Cookie validity: current window valid, wrong window invalid.
+	cookie := mgr.cookieFor(ip)
+	if !mgr.validCookie(ip, cookie) {
+		t.Fatal("cookie for the current window must verify")
+	}
+	if mgr.validCookie(ip, []byte("garbage-cookie")) {
+		t.Fatal("a wrong cookie must not verify")
+	}
+	if mgr.validCookie([]byte("10.0.0.1"), cookie) {
+		t.Fatal("a cookie must not verify for a different IP")
+	}
+}

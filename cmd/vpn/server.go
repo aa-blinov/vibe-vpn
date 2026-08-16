@@ -14,6 +14,7 @@ import (
 
 	"github.com/aa-blinov/vibe-vpn/internal/config"
 	"github.com/aa-blinov/vibe-vpn/internal/crypto"
+	"github.com/aa-blinov/vibe-vpn/internal/ctl"
 	"github.com/aa-blinov/vibe-vpn/internal/framing"
 	"github.com/aa-blinov/vibe-vpn/internal/metrics"
 	"github.com/aa-blinov/vibe-vpn/internal/pcap"
@@ -123,6 +124,22 @@ func runServer(args []string) error {
 		return err
 	}
 	mgr.SetTUN(iface)
+
+	// Optional control socket for `vibe-vpn status`.
+	var ctlSrv *ctl.Server
+	if sc.Ctl != "" {
+		ctlSrv, err = ctl.Serve(sc.Ctl, func() string {
+			st := mgr.Stats()
+			txp, txb, rxp, rxb := mgr.Traffic()
+			return fmt.Sprintf("sessions=%d handshakes=%d dropped=%d tx=%d/%d rx=%d/%d",
+				st.Sessions.Load(), st.Handshakes.Load(), st.Dropped.Load(), txp, txb, rxp, rxb)
+		})
+		if err != nil {
+			return err
+		}
+		defer ctlSrv.Close()
+		logger.Printf("control socket on %s", sc.Ctl)
+	}
 
 	// Optional Prometheus metrics endpoint on a loopback address.
 	var metricsSrv *metrics.Server

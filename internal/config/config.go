@@ -18,6 +18,9 @@ const (
 	DefaultSessionTimeout   = 300 // seconds
 	DefaultHandshakeTimeout = 10  // seconds
 	DefaultStatsInterval    = 15  // seconds
+	// DefaultRekeySeconds matches WireGuard's short-lived session cadence:
+	// transport keys are rotated roughly every two minutes.
+	DefaultRekeySeconds = 120
 )
 
 // Client is the client side configuration.
@@ -35,6 +38,7 @@ type Client struct {
 	RekeyAfterSeconds   int        `yaml:"rekey_after_seconds,omitempty"`
 	SetupRouting        bool       `yaml:"setup_routing"`
 	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
+	Ctl                 string     `yaml:"ctl,omitempty"`     // unix socket path for `vibe-vpn status`
 	TLS                 *ClientTLS `yaml:"tls,omitempty"`
 	Desync              *Desync    `yaml:"desync,omitempty"`
 	Shaping             Shaping    `yaml:"shaping,omitempty"`
@@ -89,6 +93,7 @@ type Server struct {
 	Keepalive           int        `yaml:"keepalive_interval,omitempty"`
 	SessionTimeout      int        `yaml:"session_timeout,omitempty"`
 	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
+	Ctl                 string     `yaml:"ctl,omitempty"`     // unix socket path for `vibe-vpn status`
 	TLS                 *ServerTLS `yaml:"tls,omitempty"`
 	Shaping             Shaping    `yaml:"shaping,omitempty"`
 	Debug               string     `yaml:"debug,omitempty"`
@@ -156,7 +161,7 @@ func (c *Client) ApplyDefaults() {
 		c.RekeyAfterPackets = 1 << 28
 	}
 	if c.RekeyAfterSeconds == 0 {
-		c.RekeyAfterSeconds = 3600
+		c.RekeyAfterSeconds = DefaultRekeySeconds
 	}
 	if c.StatsInterval == 0 {
 		c.StatsInterval = DefaultStatsInterval

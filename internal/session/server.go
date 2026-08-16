@@ -70,9 +70,26 @@ type Manager struct {
 	// Aggregate traffic across all sessions.
 	txPackets, txBytes atomic.Uint64
 	rxPackets, rxBytes atomic.Uint64
+
+	// Anti-DoS handshake cookies.
+	cookieSecret [32]byte
+	cookieRateMu sync.Mutex
+	cookieRate   map[string]*rateBucket
 }
 
 // NewManager creates a session manager for the given subnet.
+// Rate limiting for handshake1 to mitigate spoofed-source DoS.
+const (
+	handshakeRateLimit  = 20
+	handshakeRateWindow = 10 * time.Second
+	cookieWindowSeconds = 3600
+)
+
+type rateBucket struct {
+	count uint32
+	reset time.Time
+}
+
 func NewManager(cfg ServerConfig) (*Manager, error) {
 	if cfg.Subnet == nil {
 		return nil, errors.New("session: server requires a subnet")
@@ -85,16 +102,50 @@ func NewManager(cfg ServerConfig) (*Manager, error) {
 	if cfg.MaxSessions <= 0 {
 		cfg.MaxSessions = DefaultMaxSessions
 	}
+	var cs [32]byte
+	rand.Read(cs[:])
 	return &Manager{
-		cfg:      cfg,
-		gw:       gw,
-		prefix:   ones,
-		byID:     make(map[uint32]*serverSession),
-		byIP:     make(map[[4]byte]*serverSession),
-		byStatic: make(map[string]*serverSession),
-		pool:     newIPPool(cfg.Subnet),
-		peers:    cfg.Peers,
+		cfg:          cfg,
+		gw:           gw,
+		prefix:       ones,
+		byID:         make(map[uint32]*serverSession),
+		byIP:         make(map[[4]byte]*serverSession),
+		byStatic:     make(map[string]*serverSession),
+		pool:         newIPPool(cfg.Subnet),
+		peers:        cfg.Peers,
+		cookieSecret: cs,
+		cookieRate:   make(map[string]*rateBucket),
 	}, nil
+}
+
+// requireCookie reports whether a handshake from the given client IP must
+// first present a cookie (rate limiting).
+func (m *Manager) requireCookie(ipKey string) bool {
+	m.cookieRateMu.Lock()
+	defer m.cookieRateMu.Unlock()
+	b, ok := m.cookieRate[ipKey]
+	if !ok || time.Now().After(b.reset) {
+		m.cookieRate[ipKey] = &rateBucket{count: 1, reset: time.Now().Add(handshakeRateWindow)}
+		return false
+	}
+	b.count++
+	return b.count > handshakeRateLimit
+}
+
+// cookieFor returns a valid cookie for the client IP.
+func (m *Manager) cookieFor(ip []byte) []byte {
+	win := time.Now().Unix() / cookieWindowSeconds
+	c := crypto.MakeCookie(m.cookieSecret[:], ip, win)
+	return c[:]
+}
+
+// validCookie checks the cookie for the current or previous window.
+func (m *Manager) validCookie(ip, cookie []byte) bool {
+	win := time.Now().Unix() / cookieWindowSeconds
+	if crypto.CheckCookie(m.cookieSecret[:], ip, cookie, win) {
+		return true
+	}
+	return crypto.CheckCookie(m.cookieSecret[:], ip, cookie, win-1)
 }
 
 func gateway(n *net.IPNet) net.IP {
@@ -522,6 +573,34 @@ func (s *serverSession) handshake1(data []byte) error {
 	if s.hs != nil || s.keys != nil {
 		return nil
 	}
+	// Anti-DoS: XK message 1 is always 52 bytes (32-byte ephemeral + AEAD tag
+	// over the 4-byte session tag payload). A client under rate limiting
+	// appends a 32-byte cookie, making the frame 84 bytes. The cookie is
+	// verified BEFORE the expensive Noise DH.
+	const (
+		hs1Len       = 52
+		hs1CookieLen = 52 + protocol.CookieLen
+	)
+	cookie := []byte(nil)
+	switch len(data) {
+	case hs1CookieLen:
+		cookie = data[len(data)-protocol.CookieLen:]
+		data = data[:len(data)-protocol.CookieLen]
+	case hs1Len:
+	default:
+		return errFatal // malformed first message
+	}
+	ip := s.peerIP()
+	if ip != nil {
+		if cookie == nil {
+			if s.mgr.requireCookie(ip.String()) {
+				return s.sendRaw(s.mgr.cookieFor(ip))
+			}
+		} else if !s.mgr.validCookie(ip, cookie) {
+			return s.sendRaw(s.mgr.cookieFor(ip))
+		}
+	}
+
 	hs, err := crypto.NewServerHandshake(s.mgr.cfg.Keypair)
 	if err != nil {
 		return errFatal
@@ -540,6 +619,19 @@ func (s *serverSession) handshake1(data []byte) error {
 	}
 	s.hs = hs
 	return s.sendRaw(m2)
+}
+
+// peerIP returns the client's IP address, or nil if it cannot be determined.
+func (s *serverSession) peerIP() net.IP {
+	r, ok := s.t.(transport.RemoteAddr)
+	if !ok {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
 }
 
 func (s *serverSession) handshake3(data []byte) error {

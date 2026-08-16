@@ -5,7 +5,7 @@ VERSION ?= 0.1.0
 PREFIX  ?= /usr/local
 DESTDIR ?=
 
-.PHONY: all build install vet fmt test cover integration clean run-server run-client
+.PHONY: all build install vet fmt test cover integration soak clean run-server run-client
 
 all: build
 
@@ -28,6 +28,11 @@ cover:
 # namespace. Requires root, iproute2, nftables and /dev/net/tun.
 integration: build
 	sudo env VPN_INTEGRATION=1 VPN_BIN=$$(pwd)/$(BIN) $(GO) test ./test/integration/ -v -count=1
+
+# Long-running reliability soak (root required). Set SOAK_SECONDS to change the
+# duration (default 30).
+soak: build
+	sudo env VPN_SOAK=1 VPN_SOAK_DURATION=$${SOAK_SECONDS:-30} VPN_BIN=$$(pwd)/$(BIN) $(GO) test ./test/integration/ -run TestSoak -v -count=1
 
 # Install the binary, systemd units and example configs.
 install: build

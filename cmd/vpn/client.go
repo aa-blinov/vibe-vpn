@@ -16,6 +16,7 @@ import (
 
 	"github.com/aa-blinov/vibe-vpn/internal/config"
 	"github.com/aa-blinov/vibe-vpn/internal/crypto"
+	"github.com/aa-blinov/vibe-vpn/internal/ctl"
 	"github.com/aa-blinov/vibe-vpn/internal/desync"
 	"github.com/aa-blinov/vibe-vpn/internal/framing"
 	"github.com/aa-blinov/vibe-vpn/internal/metrics"
@@ -164,6 +165,19 @@ func runClient(args []string) error {
 		Pcap:              pcapWriter,
 		Log:               logger,
 	})
+
+	// Optional control socket for `vibe-vpn status`.
+	var ctlSrv *ctl.Server
+	if cc.Ctl != "" {
+		ctlSrv, err = ctl.Serve(cc.Ctl, func() string {
+			return client.Stats().Dump("client")
+		})
+		if err != nil {
+			return err
+		}
+		defer ctlSrv.Close()
+		logger.Printf("control socket on %s", cc.Ctl)
+	}
 
 	// Optional Prometheus metrics endpoint on a loopback address.
 	var metricsSrv *metrics.Server

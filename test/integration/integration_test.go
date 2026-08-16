@@ -35,7 +35,7 @@ const (
 )
 
 func TestMain(m *testing.M) {
-	if os.Getenv("VPN_INTEGRATION") == "" {
+	if os.Getenv("VPN_INTEGRATION") == "" && os.Getenv("VPN_SOAK") == "" {
 		os.Exit(0) // skipped by default
 	}
 	os.Exit(m.Run())

@@ -326,6 +326,13 @@ make build          # build ./bin/vibe-vpn
 make install        # installs to /usr/local (PREFIX=... to change)
 ```
 
+Releases are published as GitHub Releases with `.tar.gz` archives, `.deb` and
+`.rpm` packages (linux amd64/arm64). Installing a release is one line:
+
+```sh
+curl -fsSL https://aa-blinov.github.io/vibe-vpn/install | bash
+```
+
 This installs:
 
 - `/usr/local/bin/vibe-vpn`
@@ -349,6 +356,9 @@ Diagnostics:
 - `kill -USR1 <pid>` dumps current statistics to the log on demand.
 - `kill -HUP <server pid>` reloads the config file and applies the `peers`
   allowlist at runtime (no restart).
+- `vibe-vpn status --config <file>` prints a running daemon's status (like
+  `wg show`) via a control socket; set `ctl: /run/vibe-vpn.sock` in the config.
+  The server reports sessions/handshakes/traffic, the client its full stats.
 - Statistics are also logged every `stats_interval` seconds.
 
 ## Quick start (two Linux machines)
@@ -543,6 +553,9 @@ sizes(<=64/256/1k/1500/gt)=10/40/30/10/0
 - `make integration` — builds the real binaries and brings up a network
   namespace with actual TUN devices, then pings the server gateway through the
   tunnel. Requires root, iproute2, nftables and `/dev/net/tun`.
+- `make soak` — a long-running reliability test: the real tunnel runs under a
+  sustained ping flood for `SOAK_SECONDS` (default 30) and must stay connected
+  and lossless afterwards. Requires root; also run before every release.
 
 ```sh
 VPN_INTEGRATION=1 sudo -E go test ./test/integration/ -v -count=1
@@ -627,6 +640,10 @@ can be wrapped around any `Transport` implementation.
 - **Defensive input handling.** Frames that fail framing, handshake
   authentication, AEAD or the replay window are dropped and counted; garbage
   before a handshake closes the connection immediately.
+- **Anti-spoofing handshake cookies.** Beyond a per-IP handshake rate limit
+  the server demands an HMAC-bound cookie before it performs the expensive
+  Noise DH, mitigating spoofed-source handshake floods. Cookies are keyed to
+  the client IP and a time window.
 
 ### What it is not
 

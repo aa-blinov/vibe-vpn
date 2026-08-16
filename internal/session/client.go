@@ -125,11 +125,10 @@ func (c *Client) Run(ctx context.Context, tun TUN, onAssign func(ip, gw net.IP, 
 		}
 	}()
 
-	// Initial connection (retrying until ctx is cancelled).
-	backoff := time.NewTimer(0)
-	if !backoff.Stop() {
-		<-backoff.C
-	}
+	// Initial connection (retrying until ctx is cancelled). The backoff timer
+	// is armed from the start so the retry loop never blocks on a stale timer.
+	backoff := time.NewTimer(reconnectBackoff)
+	defer backoff.Stop()
 	for {
 		if err := c.connect(ctx); err == nil {
 			break
@@ -289,6 +288,7 @@ func (c *Client) handshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var cookie []byte
 	if err := c.sendRaw(m1); err != nil {
 		return err
 	}
@@ -296,10 +296,9 @@ func (c *Client) handshake(ctx context.Context) error {
 		c.cfg.Log.Printf("sent handshake1 (%d bytes)", len(m1))
 	}
 
-	if err := c.waitRaw(ctx, func(msg []byte) error {
-		_, _, _, err := hs.Read(msg)
-		return err
-	}); err != nil {
+	// Wait for message 2; if the server demands a cookie, retry message 1 with
+	// the cookie appended (server-side rate limiting).
+	if err := c.waitHandshakeReply(ctx, hs, &cookie, &m1, tag[:]); err != nil {
 		if c.cfg.Log != nil {
 			c.cfg.Log.Printf("handshake1 reply: %v", err)
 		}
@@ -338,6 +337,41 @@ func (c *Client) handshake(ctx context.Context) error {
 	c.stats.Handshakes.Add(1)
 	c.stats.HandshakeNanos.Store(int64(time.Since(start)))
 	return nil
+}
+
+// waitHandshakeReply waits for noise message 2. If a cookie challenge
+// arrives, it re-sends message 1 with the cookie appended and continues.
+func (c *Client) waitHandshakeReply(ctx context.Context, hs *crypto.Handshake, cookie *[]byte, m1 *[]byte, tag []byte) error {
+	t := time.NewTimer(c.cfg.HandshakeTimeout)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			return ErrTimeout
+		case r := <-c.recvCh:
+			if r.err != nil {
+				releaseBuf(c.t, r.data)
+				return r.err
+			}
+			_, _, _, err := hs.Read(r.data)
+			if err == nil {
+				releaseBuf(c.t, r.data)
+				return nil
+			}
+			if len(r.data) == protocol.CookieLen && *cookie == nil {
+				*cookie = append([]byte(nil), r.data...)
+				releaseBuf(c.t, r.data)
+				*m1 = append(*m1, *cookie...)
+				if err := c.sendRaw(*m1); err != nil {
+					return err
+				}
+				continue
+			}
+			releaseBuf(c.t, r.data)
+		}
+	}
 }
 
 // waitRaw consumes datagrams until try() accepts one (returns nil), subject to

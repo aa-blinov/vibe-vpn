@@ -1,8 +1,11 @@
 package crypto
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -92,4 +95,24 @@ func DecryptKey(blob, passphrase string) ([]byte, error) {
 		return nil, errors.New("crypto: decrypted key is invalid")
 	}
 	return priv, nil
+}
+
+// MakeCookie returns an anti-DoS cookie bound to the client IP and a time
+// window. It is HMAC-SHA256 over the IP, so a spoofed source cannot obtain a
+// cookie without the server secret.
+func MakeCookie(secret, clientIP []byte, window int64) [32]byte {
+	h := hmac.New(sha256.New, secret)
+	var w [8]byte
+	binary.BigEndian.PutUint64(w[:], uint64(window))
+	h.Write(w[:])
+	h.Write(clientIP)
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// CheckCookie verifies a cookie for the client IP and window.
+func CheckCookie(secret, clientIP, cookie []byte, window int64) bool {
+	want := MakeCookie(secret, clientIP, window)
+	return hmac.Equal(want[:], cookie)
 }

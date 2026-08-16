@@ -1,0 +1,29 @@
+name: vibe-vpn
+arch: "@ARCH@"
+platform: linux
+version: "@VERSION@"
+section: net
+priority: optional
+maintainer: vibe-vpn
+description: Research VPN with pluggable obfuscated transports
+homepage: https://github.com/aa-blinov/vibe-vpn
+license: MIT
+contents:
+  - src: ./dist/vibe-vpn
+    dst: /usr/bin/vibe-vpn
+    file_info:
+      mode: 0755
+  - src: ./deploy/vibe-vpn-server.service
+    dst: /usr/lib/systemd/system/vibe-vpn-server.service
+  - src: ./deploy/vibe-vpn-client.service
+    dst: /usr/lib/systemd/system/vibe-vpn-client.service
+  - src: ./configs/server.yaml.example
+    dst: /etc/vibe-vpn/server.yaml.example
+    file_info:
+      mode: 0600
+  - src: ./configs/client.yaml.example
+    dst: /etc/vibe-vpn/client.yaml.example
+    file_info:
+      mode: 0600
+scripts:
+  postinstall: ./packaging/postinstall.sh

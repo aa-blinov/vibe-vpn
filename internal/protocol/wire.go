@@ -24,7 +24,11 @@ const (
 	MsgRekey3     byte = 0x09 // client -> server: rekey handshake (inside AEAD)
 	MsgAssign     byte = 0x0A // server -> client: encrypted address assignment
 	MsgDecoy      byte = 0x0B // encrypted decoy traffic, discarded by the receiver
+	MsgCookie     byte = 0x0C // server -> client: anti-DoS handshake cookie (raw)
 )
+
+// CookieLen is the size of an anti-DoS handshake cookie.
+const CookieLen = 32
 
 // MaxWire is the largest datagram body the protocol will produce.
 const MaxWire = 65507
@@ -57,6 +61,8 @@ func TypeName(t byte) string {
 		return "assign"
 	case MsgDecoy:
 		return "decoy"
+	case MsgCookie:
+		return "cookie"
 	}
 	return fmt.Sprintf("unknown(%d)", t)
 }
