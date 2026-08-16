@@ -32,15 +32,17 @@ What has been checked automatically and what still needs a human reviewer.
 
 - Per-frame AEAD (Seal+Open, 1200-byte payload): ~4.7 µs/frame, 2 allocs/op
   (the crypto ceiling; ~210k frames/s).
-- Full client/server stack over loopback UDP with TUN: ~31.5 µs/packet
-  (~32k packets/s), **2 allocs/op**, 320 B/op. Optimizations applied:
-  single-allocation in-place AEAD seal, reused decryption plaintext buffer,
-  UDP endpoint keyed by `netip.AddrPort` (no per-datagram string/addr
-  allocation).
-- The remaining ~27 µs per packet is syscalls (TUN + UDP), goroutine
-  scheduling and channel hops, not cryptography or allocations. Going faster
-  needs architectural work: transport buffer pooling, batching, io_uring /
-  zero-copy, or a kernel data path.
+- Full client/server stack over loopback UDP with TUN:
+  - round-trip (one packet in flight): ~31.5 µs/packet;
+  - **sustained pipeline: ~9.2 µs/packet (~109k packets/s), 13 MB/s at
+    100-byte packets (~1 Gbps at MTU-sized packets), 1 allocs/op**.
+  Optimizations applied: single-allocation in-place AEAD seal, reused
+  decryption plaintext buffer, UDP endpoint keyed by `netip.AddrPort` (no
+  per-datagram string/addr allocation), batched receive draining in the
+  session run loops (fewer goroutine wakeups under load).
+- The sustained pipeline is within ~2x of the crypto ceiling (~4.7 µs/frame);
+  the remainder is UDP syscalls and goroutine scheduling. Further gains need
+  batching (recvmmsg), io_uring / zero-copy, or a kernel data path.
 
 ## What remains
 

@@ -72,7 +72,7 @@ type fakeTUN struct {
 }
 
 func newFakeTUN() *fakeTUN {
-	return &fakeTUN{in: make(chan []byte, 64), out: make(chan []byte, 64)}
+	return &fakeTUN{in: make(chan []byte, 4096), out: make(chan []byte, 4096)}
 }
 
 func (f *fakeTUN) ReadPacket() ([]byte, error) {
@@ -84,12 +84,8 @@ func (f *fakeTUN) ReadPacket() ([]byte, error) {
 }
 
 func (f *fakeTUN) WritePacket(b []byte) error {
-	select {
-	case f.out <- b:
-		return nil
-	default:
-		return errors.New("fake tun buffer full")
-	}
+	f.out <- b // blocking: gives the reader backpressure instead of dropping
+	return nil
 }
 
 // ------------------------------------------------------------- server helper

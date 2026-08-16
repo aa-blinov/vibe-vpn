@@ -382,13 +382,16 @@ func (s *serverSession) run() {
 		case <-s.ctx.Done():
 			return
 		case r := <-s.recvCh:
-			if r.err != nil {
-				return
-			}
-			s.lastRecv = time.Now()
-			if err := s.handle(r.data); err != nil {
-				if errors.Is(err, errFatal) {
+		drainLoop:
+			for r := r; ; {
+				if !s.drainRecv(r) {
 					return
+				}
+				select {
+				case r2 := <-s.recvCh:
+					r = r2
+				default:
+					break drainLoop
 				}
 			}
 		case pkt := <-s.replyCh:
@@ -416,6 +419,21 @@ func (s *serverSession) run() {
 			}
 		}
 	}
+}
+
+// drainRecv handles one received frame and reports whether the session should
+// keep running (false means a fatal error or closed transport).
+func (s *serverSession) drainRecv(r recvResult) bool {
+	if r.err != nil {
+		return false
+	}
+	s.lastRecv = time.Now()
+	if err := s.handle(r.data); err != nil {
+		if errors.Is(err, errFatal) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *serverSession) transportReader(ch chan recvResult) {

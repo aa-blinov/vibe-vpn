@@ -171,17 +171,19 @@ func (c *Client) Run(ctx context.Context, tun TUN, onAssign func(ip, gw net.IP, 
 			c.sendPacket(pkt)
 
 		case r := <-c.recvCh:
-			if r.err != nil {
-				c.reconnect(ctx, tun, onAssign)
-				continue
-			}
-			c.lastRecv = time.Now()
-			if err := c.handleFrame(r.data, tun); err != nil {
-				if errors.Is(err, ErrPeerClosed) {
-					c.reconnect(ctx, tun, onAssign)
-					continue
+			// Drain any further buffered frames in the same iteration to cut
+			// down on goroutine wakeups under sustained load.
+		drainLoop:
+			for r := r; ; {
+				if c.drainRecv(r, tun, ctx, onAssign) {
+					break drainLoop
 				}
-				// Malformed frames are counted and ignored.
+				select {
+				case r2 := <-c.recvCh:
+					r = r2
+				default:
+					break drainLoop
+				}
 			}
 
 		case <-keepalive.C:
@@ -203,6 +205,24 @@ func (c *Client) Run(ctx context.Context, tun TUN, onAssign func(ip, gw net.IP, 
 			}
 		}
 	}
+}
+
+// drainRecv handles one received frame and reports whether the run loop should
+// stop draining (a reconnect replaced the receive channel).
+func (c *Client) drainRecv(r recvResult, tun TUN, ctx context.Context, onAssign func(net.IP, net.IP, int)) bool {
+	if r.err != nil {
+		c.reconnect(ctx, tun, onAssign)
+		return true
+	}
+	c.lastRecv = time.Now()
+	if err := c.handleFrame(r.data, tun); err != nil {
+		if errors.Is(err, ErrPeerClosed) {
+			c.reconnect(ctx, tun, onAssign)
+			return true
+		}
+		// Malformed frames are counted and ignored.
+	}
+	return false
 }
 
 // connect establishes a fresh connection: transport, handshake, keys and IP
