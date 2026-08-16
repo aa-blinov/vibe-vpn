@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package routing configures host networking for the tunnel (TUN addresses,
 // routes, IPv4 forwarding and nftables NAT). All operations are delegated to
 // standard tools (ip, sysctl, nft) so the setup stays visible and easy to

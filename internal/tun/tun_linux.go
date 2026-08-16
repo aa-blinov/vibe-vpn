@@ -1,6 +1,5 @@
-// Package tun provides a minimal Linux TUN device using only raw syscalls.
-// The device is opened with IFF_NO_PI, so every Read/Write is a complete,
-// unframed IPv4 packet.
+//go:build linux
+
 package tun
 
 import (
@@ -20,7 +19,7 @@ type Tun struct {
 
 // Open creates (or opens an existing) TUN device with the given name and MTU.
 // It requires CAP_NET_ADMIN.
-func Open(name string, mtu int) (*Tun, error) {
+func Open(name string, mtu int) (Device, error) {
 	if name == "" {
 		name = "vibe%d"
 	}

@@ -15,6 +15,32 @@ jobs:
       matrix:
         goos: [linux]
         goarch: [amd64, arm64]
+
+  build-windows:
+    name: build (windows/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w -X main.version=${tag#v}" \
+            -o dist/vibe-vpn.exe ./cmd/vpn
+          (cd dist && zip "vibe-vpn-${tag}-windows-amd64.zip" vibe-vpn.exe)
+          (cd dist && sha256sum "vibe-vpn-${tag}-windows-amd64.zip" \
+            > "vibe-vpn-${tag}-windows-amd64.zip.sha256")
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.zip*
+          generate_release_notes: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5

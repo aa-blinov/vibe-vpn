@@ -180,8 +180,7 @@ func runServer(args []string) error {
 	}
 
 	// SIGHUP reloads the config and applies the peer allowlist at runtime.
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
+	hup := reloadSignals()
 	go func() {
 		for range hup {
 			reloaded, err := config.Load(*cfgPath)
@@ -241,8 +240,7 @@ func runServer(args []string) error {
 	defer stop()
 
 	// SIGUSR1 dumps current statistics on demand.
-	usr1 := make(chan os.Signal, 1)
-	signal.Notify(usr1, syscall.SIGUSR1)
+	usr1 := statsSignals()
 	go func() {
 		for range usr1 {
 			st := mgr.Stats()

@@ -192,6 +192,24 @@ indistinguishable from *web traffic*; a raw port is indistinguishable from
 *random noise* — which is itself a service-like pattern to an active analyser.
 Pick whichever fits your threat model, or rotate between them.
 
+### Windows client
+
+The client also runs on Windows (the server remains Linux-only). It uses the
+**Wintun** driver (from the WireGuard project, loaded at runtime as
+`wintun.dll`) and configures routing through `netsh`/`route`. Everything else
+— the protocol, session, crypto and all three transports — is platform
+independent.
+
+- Download `vibe-vpn-<version>-windows-amd64.zip` from a GitHub Release.
+- Install the Wintun driver (a `wintun.dll` next to the executable), run as
+  Administrator:
+  ```sh
+  vibe-vpn.exe client --server your.domain:443 --peer <server-dir> --out C:\vibe-vpn
+  ```
+- Notes: the control socket (`ctl:`) works, but POSIX signals (`SIGUSR1`,
+  `SIGHUP`) are not delivered on Windows, and the desync (nfqws) integration is
+  Linux-only.
+
 ### TLS transport (HTTPS camouflage)
 
 The client and server also support a TLS transport that hides the tunnel inside

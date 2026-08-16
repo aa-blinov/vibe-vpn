@@ -215,8 +215,7 @@ func runClient(args []string) error {
 	defer stop()
 
 	// SIGUSR1 dumps current statistics on demand.
-	usr1 := make(chan os.Signal, 1)
-	signal.Notify(usr1, syscall.SIGUSR1)
+	usr1 := statsSignals()
 	go func() {
 		for range usr1 {
 			logger.Print(client.Stats().Dump("client"))

@@ -5,7 +5,7 @@ VERSION ?= 0.1.0
 PREFIX  ?= /usr/local
 DESTDIR ?=
 
-.PHONY: all build install vet fmt test cover integration soak clean run-server run-client
+.PHONY: all build build-windows install vet fmt test cover integration soak clean run-server run-client
 
 all: build
 
@@ -49,8 +49,12 @@ install: build
 	@echo "installed. copy configs to /etc/vibe-vpn/ and enable a service:"
 	@echo "  sudo systemctl enable --now vibe-vpn-server"
 
+build-windows:
+	mkdir -p dist
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -ldflags "-X main.version=$(VERSION)" -o dist/vibe-vpn.exe ./cmd/vpn
+
 clean:
-	rm -rf bin
+	rm -rf bin dist
 
 run-server: build
 	sudo ./$(BIN) server --config server.yaml
