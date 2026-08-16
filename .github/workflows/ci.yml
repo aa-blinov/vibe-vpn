@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: unit + vet + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: fmt
+        run: test -z "$(gofmt -l cmd internal test)"
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: make build
+      - name: test (race)
+        run: go test -race -count=1 ./internal/...
+      - name: coverage
+        run: go test -count=1 -cover ./internal/...
+
+  integration:
+    name: integration (TUN)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: build
+        run: make build
+      - name: integration
+        run: |
+          sudo env VPN_INTEGRATION=1 VPN_BIN="$(pwd)/bin/vibe-vpn" go test ./test/integration/ -v -count=1
