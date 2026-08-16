@@ -60,6 +60,9 @@ type Manager struct {
 	byStatic map[string]*serverSession
 	nextID   uint32
 
+	peersMu sync.RWMutex
+	peers   map[string][]byte // client allowlist; empty = allow any
+
 	pool      *ipPool
 	stats     ServerStats
 	dataPlane TUN
@@ -86,6 +89,7 @@ func NewManager(cfg ServerConfig) (*Manager, error) {
 		byIP:     make(map[[4]byte]*serverSession),
 		byStatic: make(map[string]*serverSession),
 		pool:     newIPPool(cfg.Subnet),
+		peers:    cfg.Peers,
 	}, nil
 }
 
@@ -127,11 +131,21 @@ func (m *Manager) CloseAll() {
 
 // allowPeer reports whether a client static public key is permitted.
 func (m *Manager) allowPeer(pub []byte) bool {
-	if len(m.cfg.Peers) == 0 {
+	m.peersMu.RLock()
+	defer m.peersMu.RUnlock()
+	if len(m.peers) == 0 {
 		return true
 	}
-	_, ok := m.cfg.Peers[base64.RawStdEncoding.EncodeToString(pub)]
+	_, ok := m.peers[base64.RawStdEncoding.EncodeToString(pub)]
 	return ok
+}
+
+// SetPeers replaces the client allowlist at runtime (used for config reload).
+// A nil or empty map allows any client.
+func (m *Manager) SetPeers(peers map[string][]byte) {
+	m.peersMu.Lock()
+	defer m.peersMu.Unlock()
+	m.peers = peers
 }
 
 // HandleTransport is called by the transport layer when a new peer appears.

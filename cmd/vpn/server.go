@@ -77,13 +77,9 @@ func runServer(args []string) error {
 	if err != nil {
 		return err
 	}
-	peers := make(map[string][]byte)
-	for _, p := range sc.Peers {
-		key, err := crypto.DecodeKey(p)
-		if err != nil {
-			return fmt.Errorf("peers: %w", err)
-		}
-		peers[crypto.EncodeKey(key)] = key
+	peers, err := parsePeers(sc.Peers)
+	if err != nil {
+		return err
 	}
 
 	// Data plane: open the server TUN and configure the gateway address.
@@ -159,6 +155,30 @@ func runServer(args []string) error {
 		defer pcapWriter.Close()
 		logger.Printf("debug capture enabled: %s.pcap", path)
 	}
+
+	// SIGHUP reloads the config and applies the peer allowlist at runtime.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for range hup {
+			reloaded, err := config.Load(*cfgPath)
+			if err != nil {
+				logger.Printf("config reload failed: %v", err)
+				continue
+			}
+			if reloaded.Server == nil {
+				logger.Printf("config reload: no server section")
+				continue
+			}
+			np, err := parsePeers(reloaded.Server.Peers)
+			if err != nil {
+				logger.Printf("config reload: %v", err)
+				continue
+			}
+			mgr.SetPeers(np)
+			logger.Printf("config reloaded (%d peers)", len(np))
+		}
+	}()
 
 	// Control plane: bind the transport (raw TCP, TLS or UDP).
 	shp := shaping(sc.Shaping)
@@ -239,6 +259,19 @@ func parseCIDR(s string) (*net.IPNet, error) {
 		return nil, fmt.Errorf("subnet %q: %w", s, err)
 	}
 	return n, nil
+}
+
+// parsePeers converts a config peer list into the allowlist map.
+func parsePeers(list []string) (map[string][]byte, error) {
+	peers := make(map[string][]byte)
+	for _, p := range list {
+		key, err := crypto.DecodeKey(p)
+		if err != nil {
+			return nil, fmt.Errorf("peers: %w", err)
+		}
+		peers[crypto.EncodeKey(key)] = key
+	}
+	return peers, nil
 }
 
 func gatewayIP(n *net.IPNet) net.IP {

@@ -841,3 +841,35 @@ func TestClientServerOverRaw(t *testing.T) {
 		t.Fatalf("expected one handshake, got %d", client.Stats().Handshakes.Load())
 	}
 }
+
+// TestSetPeersRuntime verifies the allowlist can be replaced at runtime.
+func TestSetPeersRuntime(t *testing.T) {
+	kp := testKeypair(t)
+	mgr, err := NewManager(ServerConfig{Keypair: kp, Subnet: testSubnet(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty allowlist: everyone allowed.
+	if !mgr.allowPeer([]byte("any-key")) {
+		t.Fatal("empty allowlist should allow any peer")
+	}
+
+	allowed := testKeypair(t)
+	denied := testKeypair(t)
+	key := crypto.EncodeKey(allowed.Public)
+	mgr.SetPeers(map[string][]byte{key: allowed.Public})
+
+	if !mgr.allowPeer(allowed.Public) {
+		t.Fatal("allowlisted peer rejected")
+	}
+	if mgr.allowPeer(denied.Public) {
+		t.Fatal("non-allowlisted peer accepted")
+	}
+
+	// Re-open the list.
+	mgr.SetPeers(nil)
+	if !mgr.allowPeer(denied.Public) {
+		t.Fatal("cleared allowlist should allow any peer again")
+	}
+}

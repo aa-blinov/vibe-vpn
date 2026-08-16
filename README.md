@@ -347,6 +347,8 @@ Diagnostics:
 
 - `vibe-vpn --version` prints the version.
 - `kill -USR1 <pid>` dumps current statistics to the log on demand.
+- `kill -HUP <server pid>` reloads the config file and applies the `peers`
+  allowlist at runtime (no restart).
 - Statistics are also logged every `stats_interval` seconds.
 
 ## Quick start (two Linux machines)
