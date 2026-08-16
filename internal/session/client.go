@@ -379,7 +379,7 @@ func (c *Client) handleFrame(data []byte, tun TUN) error {
 			// #nosec G115 -- a forged cookie only skews RTT and the result is clamped below.
 			sent := time.Unix(0, int64(binary.BigEndian.Uint64(f.Payload)))
 			if rtt := time.Since(sent); rtt > 0 && rtt < time.Minute {
-				c.stats.LastRTTNanos.Store(int64(rtt))
+				c.stats.RecordRTT(rtt)
 			}
 		}
 		return nil

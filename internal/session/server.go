@@ -66,6 +66,10 @@ type Manager struct {
 	pool      *ipPool
 	stats     ServerStats
 	dataPlane TUN
+
+	// Aggregate traffic across all sessions.
+	txPackets, txBytes atomic.Uint64
+	rxPackets, rxBytes atomic.Uint64
 }
 
 // NewManager creates a session manager for the given subnet.
@@ -106,6 +110,11 @@ func (m *Manager) Gateway() net.IP { return m.gw }
 
 // Stats returns aggregate server statistics.
 func (m *Manager) Stats() *ServerStats { return &m.stats }
+
+// Traffic returns the aggregate packets/bytes counters.
+func (m *Manager) Traffic() (txPkts, txBytes, rxPkts, rxBytes uint64) {
+	return m.txPackets.Load(), m.txBytes.Load(), m.rxPackets.Load(), m.rxBytes.Load()
+}
 
 // Active returns the number of live sessions.
 func (m *Manager) Active() int {
@@ -593,6 +602,8 @@ func (s *serverSession) handleData(pt []byte) error {
 	s.stats.PacketsReceived.Add(1)
 	s.stats.BytesReceived.Add(uint64(len(pt)))
 	s.stats.recordSize(len(pt))
+	s.mgr.rxPackets.Add(1)
+	s.mgr.rxBytes.Add(uint64(len(pt)))
 	return nil
 }
 
@@ -625,6 +636,8 @@ func (s *serverSession) encryptSend(typ byte, pt []byte) bool {
 	s.stats.PacketsSent.Add(1)
 	s.stats.BytesSent.Add(uint64(len(wire)))
 	s.stats.recordSize(len(pt))
+	s.mgr.txPackets.Add(1)
+	s.mgr.txBytes.Add(uint64(len(wire)))
 	if typ == protocol.MsgData {
 		s.lastDataSend = time.Now()
 	}

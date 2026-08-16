@@ -24,6 +24,9 @@ type Stats struct {
 	LastRTTNanos atomic.Int64  // last keepalive round-trip, 0 until measured
 	LossTotal    atomic.Uint64 // cumulative packets detected as lost
 
+	// rttBuckets stores cumulative RTT samples for metrics histograms.
+	rttBuckets [rttBucketCount]atomic.Uint64
+
 	SizeLE64   atomic.Uint64
 	SizeLE256  atomic.Uint64
 	SizeLE1024 atomic.Uint64
@@ -54,6 +57,40 @@ func (s *Stats) RTT() time.Duration {
 // HandshakeDuration returns the duration of the last handshake (0 if unknown).
 func (s *Stats) HandshakeDuration() time.Duration {
 	return time.Duration(s.HandshakeNanos.Load())
+}
+
+// rttBucketCount is the number of RTT histogram buckets.
+const rttBucketCount = 9
+
+// rttThresholdsMS are the upper bounds of the RTT histogram buckets.
+var rttThresholdsMS = [rttBucketCount]float64{10, 25, 50, 100, 250, 500, 1000, 2000, 5000}
+
+// RecordRTT adds a measured round-trip time to the histogram.
+func (s *Stats) RecordRTT(d time.Duration) {
+	ms := float64(d) / float64(time.Millisecond)
+	for i, b := range rttThresholdsMS {
+		if ms <= b {
+			s.rttBuckets[i].Add(1)
+		}
+	}
+	s.LastRTTNanos.Store(int64(d))
+}
+
+// RTTThresholds returns a copy of the histogram bucket upper bounds (ms).
+func RTTThresholds() []float64 {
+	out := make([]float64, len(rttThresholdsMS))
+	copy(out, rttThresholdsMS[:])
+	return out
+}
+
+// RTTBuckets returns the cumulative bucket counts (le values are
+// rttThresholdsMS).
+func (s *Stats) RTTBuckets() []uint64 {
+	out := make([]uint64, len(rttThresholdsMS))
+	for i := range out {
+		out[i] = s.rttBuckets[i].Load()
+	}
+	return out
 }
 
 // Dump renders the statistics as a single log line.

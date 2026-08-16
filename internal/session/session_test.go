@@ -873,3 +873,24 @@ func TestSetPeersRuntime(t *testing.T) {
 		t.Fatal("cleared allowlist should allow any peer again")
 	}
 }
+
+// TestRTTBuckets verifies RTT histogram accounting.
+func TestRTTBuckets(t *testing.T) {
+	var st Stats
+	st.RecordRTT(5 * time.Millisecond)   // <= 10ms
+	st.RecordRTT(40 * time.Millisecond)  // <= 50ms
+	st.RecordRTT(400 * time.Millisecond) // <= 500ms
+
+	b := st.RTTBuckets()
+	if len(b) != len(RTTThresholds()) {
+		t.Fatalf("bucket count %d != threshold count %d", len(b), len(RTTThresholds()))
+	}
+	// Cumulative counts: 5ms hits all buckets, 40ms hits buckets >= 50ms,
+	// 400ms hits buckets >= 500ms.
+	want := []uint64{1, 1, 2, 2, 2, 3, 3, 3, 3}
+	for i := range want {
+		if b[i] != want[i] {
+			t.Fatalf("bucket %d = %d, want %d (all: %v)", i, b[i], want[i], b)
+		}
+	}
+}

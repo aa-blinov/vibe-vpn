@@ -128,10 +128,15 @@ func runServer(args []string) error {
 	if sc.Metrics != "" {
 		metricsSrv, err = metrics.Serve(sc.Metrics, func() map[string]float64 {
 			st := mgr.Stats()
+			txp, txb, rxp, rxb := mgr.Traffic()
 			return map[string]float64{
 				"vibe_sessions":         float64(st.Sessions.Load()),
 				"vibe_handshakes_total": float64(st.Handshakes.Load()),
 				"vibe_dropped_total":    float64(st.Dropped.Load()),
+				"vibe_tx_packets":       float64(txp),
+				"vibe_tx_bytes":         float64(txb),
+				"vibe_rx_packets":       float64(rxp),
+				"vibe_rx_bytes":         float64(rxb),
 			}
 		})
 		if err != nil {

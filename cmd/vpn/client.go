@@ -170,7 +170,7 @@ func runClient(args []string) error {
 	if cc.Metrics != "" {
 		metricsSrv, err = metrics.Serve(cc.Metrics, func() map[string]float64 {
 			st := client.Stats()
-			return map[string]float64{
+			m := map[string]float64{
 				"vibe_tx_packets":       float64(st.PacketsSent.Load()),
 				"vibe_tx_bytes":         float64(st.BytesSent.Load()),
 				"vibe_rx_packets":       float64(st.PacketsReceived.Load()),
@@ -181,6 +181,14 @@ func runClient(args []string) error {
 				"vibe_loss_total":       float64(st.LossTotal.Load()),
 				"vibe_rtt_seconds":      st.RTT().Seconds(),
 			}
+			// Cumulative RTT histogram (Prometheus buckets).
+			buckets := st.RTTBuckets()
+			thresholds := session.RTTThresholds()
+			for i, count := range buckets {
+				label := fmt.Sprintf("%.0fms", thresholds[i])
+				m["vibe_rtt_bucket{le=\""+label+"\"}"] = float64(count)
+			}
+			return m
 		})
 		if err != nil {
 			return err
