@@ -374,31 +374,6 @@ func (c *Client) waitHandshakeReply(ctx context.Context, hs *crypto.Handshake, c
 	}
 }
 
-// waitRaw consumes datagrams until try() accepts one (returns nil), subject to
-// a timeout. Failed attempts are discarded; the Noise state is rolled back by
-// the library so a failed read does not poison the handshake.
-func (c *Client) waitRaw(ctx context.Context, try func([]byte) error) error {
-	t := time.NewTimer(c.cfg.HandshakeTimeout)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-t.C:
-			return ErrTimeout
-		case r := <-c.recvCh:
-			if r.err != nil {
-				return r.err
-			}
-			err := try(r.data)
-			releaseBuf(c.t, r.data)
-			if err == nil {
-				return nil
-			}
-		}
-	}
-}
-
 // waitAssign consumes session frames until the address assignment arrives.
 func (c *Client) waitAssign(ctx context.Context) ([]byte, error) {
 	t := time.NewTimer(c.cfg.HandshakeTimeout)
