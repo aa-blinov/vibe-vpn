@@ -53,3 +53,7 @@ What has been checked automatically and what still needs a human reviewer.
   (`docs/protocol.md`) and the implementation. Automated tooling does not
   replace a reviewer who can reason about the threat model.
 - Long-running soak/reliability testing against real-world networks.
+- **On-network verification** that each transport survives the actual TSPU in
+  front of a real deployment. The integration suite proves the mechanics
+  (multi-transport server, client failover, `quick` lifecycle) but not that a
+  given carrier (TLS/raw/UDP) passes a specific censor's filters.

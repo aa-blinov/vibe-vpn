@@ -5,12 +5,27 @@ VERSION ?= 0.1.0
 PREFIX  ?= /usr/local
 DESTDIR ?=
 
-.PHONY: all build build-windows install vet fmt test cover integration soak clean run-server run-client
+# Reproducible-build knobs. Override on the command line if needed:
+#   make build SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+SOURCE_DATE_EPOCH ?= 0
+COMMIT            ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+REPRO_FLAGS       := -trimpath -buildvcs=false
+LDFLAGS           := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildTime=$(SOURCE_DATE_EPOCH)
+
+export CGO_ENABLED=0
+export GOFLAGS ?= -mod=readonly
+
+.PHONY: all build build-windows build-reproducible install vet fmt test cover integration soak clean run-server run-client
 
 all: build
 
 build:
-	$(GO) build -ldflags "-X main.version=$(VERSION)" -o $(BIN) $(PKG)
+	$(GO) build $(REPRO_FLAGS) -ldflags "$(LDFLAGS)" -o $(BIN) $(PKG)
+
+# Bit-for-bit identical build given the same toolchain, source tree and
+# SOURCE_DATE_EPOCH. Use `make build-reproducible SOURCE_DATE_EPOCH=<git-tag-ts>`.
+build-reproducible:
+	$(GO) build $(REPRO_FLAGS) -asmflags 'all=-trimpath="$(abspath .)"' -gcflags 'all=-trimpath="$(abspath .)"' -ldflags "$(LDFLAGS) -buildid=" -o $(BIN) $(PKG)
 
 vet:
 	$(GO) vet ./...
@@ -51,7 +66,7 @@ install: build
 
 build-windows:
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -ldflags "-X main.version=$(VERSION)" -o dist/vibe-vpn.exe ./cmd/vpn
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build $(REPRO_FLAGS) -ldflags "$(LDFLAGS)" -o dist/vibe-vpn.exe ./cmd/vpn
 
 clean:
 	rm -rf bin dist

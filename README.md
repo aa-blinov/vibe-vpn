@@ -174,14 +174,32 @@ length-prefixed frames. The server behaves like a **black hole**: a connection
 that does not complete the handshake is simply closed, so anyone without the
 shared key sees only opaque random data.
 
+As a *sole* transport:
+
 ```yaml
 # server
-transport: raw
-listen: 0.0.0.0:8443
+server:
+  transport: raw
+  listen: 0.0.0.0:8443
 
 # client
-transport: raw
-server: 1.2.3.4:8443
+client:
+  transport: raw
+  server: 1.2.3.4:8443
+```
+
+As an *additional* listener (for redundancy — see "Transport redundancy"
+below), the server can also serve raw TCP alongside TLS/UDP:
+
+```yaml
+# server
+server:
+  raw:
+    listen: 0.0.0.0:4444
+
+# client — fall back to raw TCP if the primary is blocked
+client:
+  raw_server: 1.2.3.4:4444
 ```
 
 This is "looks like nothing" obfuscation in the spirit of
@@ -191,6 +209,48 @@ handshake instead of a recognizable protocol), not a byte-compatible obfs4
 indistinguishable from *web traffic*; a raw port is indistinguishable from
 *random noise* — which is itself a service-like pattern to an active analyser.
 Pick whichever fits your threat model, or rotate between them.
+
+### Transport redundancy (multi-transport server + client fallback)
+
+The server can bind **several transports at once** (UDP, TLS and raw TCP are
+independent listeners), and the client tries its transports **in order on every
+reconnect**, falling back to the next if the current one is unreachable or
+blocked. This means if, say, TLS on 443 is blocked but raw TCP passes, the
+tunnel comes up automatically over the fallback — no manual action.
+
+```yaml
+# server — UDP on 443, TLS on 443, raw on 4444, all at once
+server:
+  listen: 0.0.0.0:443      # UDP (rendezvous on 443, like QUIC)
+  tls:
+    listen: 0.0.0.0:443    # TCP 443 shares the port with the UDP listener
+    cert: /etc/vibe-vpn/server.crt
+    key: /etc/vibe-vpn/server.key
+  raw:
+    listen: 0.0.0.0:4444
+
+# client — try TLS first, then raw TCP
+client:
+  server: vpn.example.com:443
+  raw_server: vpn.example.com:4444
+```
+
+See `docs/deployment.md` for CDN masking (nginx `stream`, Cloudflare Spectrum)
+and full redundancy guidance.
+
+### wg-quick-style client lifecycle (`vibe-vpn quick`)
+
+`vibe-vpn quick up|down|status --config client.yaml` manages the client as a
+background daemon, in the spirit of `wg-quick up/down`:
+
+```sh
+sudo vibe-vpn quick up     --config client.yaml   # start the client as a daemon
+sudo vibe-vpn quick status --config client.yaml   # show the running daemon's stats
+sudo vibe-vpn quick down   --config client.yaml   # stop the daemon gracefully
+```
+
+The client config must set `ctl:` (the control socket) for this to work.
+Logs go to `<ctl>.log`.
 
 ### Windows client
 
@@ -402,8 +462,9 @@ The `vibe-vpn.sh` script asks the few questions and prepares everything.
 
 It prompts for the domain, the TLS port, the output directory and the subnet,
 then generates keys + certificate + config, opens the firewall port and offers
-to install a systemd service (auto-start on boot). At the end it prints the
-directory to copy to the client.
+to install a systemd service (auto-start on boot). It can also enable an
+obfs4-style raw TCP fallback port for transport redundancy. At the end it
+prints the directory to copy to the client.
 
 **Client** (on your machine):
 
@@ -412,8 +473,9 @@ directory to copy to the client.
 ```
 
 It asks for the server address (`vpn.example.com:443`), the peer directory
-(copied from the server) and whether to enable nfqws desync, then generates the
-client config and offers to connect immediately.
+(copied from the server), whether to enable nfqws desync and whether to enable
+the raw TCP fallback, then generates the client config and offers to connect
+immediately.
 
 ### One-command setup and run (no script)
 

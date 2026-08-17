@@ -47,16 +47,26 @@ setup_server() {
   ask OUT "Output directory" "/etc/vibe-vpn-server"
   ask SUBNET "Tunnel subnet" "10.77.0.0/24"
 
+  local raw_args=()
+  if yesno "Also enable an obfs4-style raw TCP fallback port (extra resilience)?" n; then
+    ask RAW_PORT "Raw TCP listen port" "4444"
+    raw_args=(--raw-listen "0.0.0.0:$RAW_PORT")
+  fi
+
   step "generating keys, TLS certificate and server.yaml"
   sudo "$BIN" setup server \
     --out "$OUT" \
     --domain "$DOMAIN" \
     --tls-listen "0.0.0.0:$TLS_PORT" \
-    --subnet "$SUBNET"
+    --subnet "$SUBNET" \
+    "${raw_args[@]}"
 
   step "opening TCP $TLS_PORT in the host firewall (ufw)"
   if command -v ufw >/dev/null 2>&1; then
     sudo ufw allow "${TLS_PORT}/tcp" >/dev/null 2>&1 && say "  ufw: allowed ${TLS_PORT}/tcp"
+    if [ -n "$RAW_PORT" ]; then
+      sudo ufw allow "${RAW_PORT}/tcp" >/dev/null 2>&1 && say "  ufw: allowed ${RAW_PORT}/tcp"
+    fi
   fi
 
   if yesno "Install as a systemd service (auto-start on boot)?" y; then
@@ -112,6 +122,10 @@ setup_client() {
   if yesno "Enable nfqws DPI desync of the tunnel's TCP flow?" n; then
     ask NFQWS "Path to the nfqws binary" "/usr/local/bin/nfqws"
     extra=(--desync --nfqws "$NFQWS")
+  fi
+  if yesno "Enable the raw TCP fallback (matches the server's raw port)?" n; then
+    ask RAW_SERVER "Raw TCP server (host:port)" ""
+    extra+=(--raw-server "$RAW_SERVER")
   fi
 
   step "generating client.yaml"

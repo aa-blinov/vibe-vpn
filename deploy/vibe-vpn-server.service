@@ -2,14 +2,30 @@
 Description=not-vpn server
 After=network-online.target
 Wants=network-online.target
+# Restart the whole unit if the service fails after boot.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=@BIN@ server --config @CONFIG@
-Restart=always
+# The client reconnects on its own; restart the server only on unexpected
+# failure (never on a clean exit).
+Restart=on-failure
 RestartSec=5
-# TUN creation, routing and nftables require privileges.
+# Stop restarting forever if it fails 5 times in 5 minutes.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+# TUN creation, routing and nftables require privileges; drop the rest.
 AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+
+# Journald logging (default) is already structured; add a stable identifier.
+SyslogIdentifier=vibe-vpn-server
 
 [Install]
 WantedBy=multi-user.target

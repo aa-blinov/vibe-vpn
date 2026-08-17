@@ -16,11 +16,13 @@ type Server struct {
 	ln     net.Listener
 	path   string
 	status func() string
+	stop   func() // invoked when a "stop" request arrives
 }
 
 // Serve listens on the unix socket at path and answers requests with the
-// current status snapshot. It removes any stale socket first.
-func Serve(path string, status func() string) (*Server, error) {
+// current status snapshot. stop, if non-nil, is invoked when a client sends a
+// "stop\n" request, so the daemon can shut down gracefully.
+func Serve(path string, status func() string, stop func()) (*Server, error) {
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -29,7 +31,7 @@ func Serve(path string, status func() string) (*Server, error) {
 	// #nosec G302 -- a read-only status socket must be queryable by any local
 	// user; it exposes no secrets.
 	_ = os.Chmod(path, 0o666)
-	s := &Server{ln: ln, path: path, status: status}
+	s := &Server{ln: ln, path: path, status: status, stop: stop}
 	go s.acceptLoop()
 	return s, nil
 }
@@ -43,8 +45,17 @@ func (s *Server) acceptLoop() {
 		go func() {
 			defer conn.Close()
 			buf := make([]byte, 256)
-			_, _ = conn.Read(buf) // consume a bounded request, then respond
-			_, _ = fmt.Fprint(conn, s.status())
+			n, _ := conn.Read(buf) // consume a bounded request, then respond
+			req := string(buf[:n])
+			switch {
+			case req == "stop\n" || req == "stop":
+				_, _ = fmt.Fprint(conn, "stopping\n")
+				if s.stop != nil {
+					s.stop()
+				}
+			default:
+				_, _ = fmt.Fprint(conn, s.status())
+			}
 		}()
 	}
 }
@@ -68,4 +79,19 @@ func Query(path string) (string, error) {
 	}
 	data, err := io.ReadAll(conn)
 	return string(data), err
+}
+
+// Stop asks the daemon listening on path to shut down gracefully.
+func Stop(path string) error {
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(conn, "stop\n"); err != nil {
+		return err
+	}
+	_, err = io.ReadAll(conn)
+	return err
 }

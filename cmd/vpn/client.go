@@ -38,6 +38,7 @@ func runClient(args []string) error {
 	noRouting := fs.Bool("no-routing", false, "skip automatic host routing setup")
 	cServer := fs.String("server", "", "auto-setup: server host:port (TLS port)")
 	cPeer := fs.String("peer", "", "auto-setup: peer directory from server setup")
+	cRawServer := fs.String("raw-server", "", "auto-setup: obfs4-style TCP fallback server host:port")
 	cDesync := fs.Bool("desync", false, "auto-setup: enable nfqws desync")
 	cNfqws := fs.String("nfqws", "/usr/local/bin/nfqws", "auto-setup: path to nfqws")
 	cOut := fs.String("out", "./vibe-vpn-client", "auto-setup: output directory")
@@ -45,7 +46,7 @@ func runClient(args []string) error {
 
 	if *cfgPath == "" {
 		// One-command mode: generate everything, then run.
-		generated, err := setupClientDir(*cOut, *cServer, *cPeer, *cDesync, *cNfqws)
+		generated, err := setupClientDir(*cOut, *cServer, *cPeer, *cRawServer, *cDesync, *cNfqws)
 		if err != nil {
 			return err
 		}
@@ -166,12 +167,17 @@ func runClient(args []string) error {
 		Log:               logger,
 	})
 
+	// Control context; cancelling it (Ctrl-C, SIGTERM, or a ctl "stop" request)
+	// shuts the client down gracefully.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Optional control socket for `vibe-vpn status`.
 	var ctlSrv *ctl.Server
 	if cc.Ctl != "" {
 		ctlSrv, err = ctl.Serve(cc.Ctl, func() string {
 			return client.Stats().Dump("client")
-		})
+		}, stop)
 		if err != nil {
 			return err
 		}
@@ -210,9 +216,6 @@ func runClient(args []string) error {
 		defer metricsSrv.Close()
 		logger.Printf("metrics on http://%s/metrics", metricsSrv.Addr())
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// SIGUSR1 dumps current statistics on demand.
 	usr1 := statsSignals()
@@ -259,16 +262,56 @@ func runClient(args []string) error {
 	return nil
 }
 
-// clientDial returns the transport dialer for the configured transport: the
-// TLS transport if a tls section is present, otherwise plain UDP.
+// clientDial returns a transport dialer that tries the configured transports in
+// order and returns the first that succeeds. This gives the client redundancy:
+// if the primary (e.g. TLS on 443) is blocked, it falls back to the next one
+// (raw TCP or UDP) transparently on each reconnect.
 func clientDial(cc *config.Client, logger *log.Logger) (func() (transport.Transport, error), error) {
-	if cc.Transport == "raw" {
-		logger.Printf("raw transport to %s (obfs4-style, no TLS)", cc.Server)
-		return func() (transport.Transport, error) { return rawtcp.Dial(cc.Server) }, nil
+	var dialers []func() (transport.Transport, error)
+
+	if cc.TLS != nil {
+		d, err := tlsDialer(cc, logger)
+		if err != nil {
+			return nil, err
+		}
+		dialers = append(dialers, d)
 	}
-	if cc.TLS == nil {
-		return func() (transport.Transport, error) { return udp.Dial(cc.Server) }, nil
+	if cc.RawServer != "" {
+		rs := cc.RawServer
+		logger.Printf("raw transport fallback to %s (obfs4-style, no TLS)", rs)
+		dialers = append(dialers, func() (transport.Transport, error) {
+			return rawtcp.Dial(rs)
+		})
 	}
+	if cc.Transport != "raw" && cc.Transport != "tls" {
+		if cc.Server != "" {
+			srv := cc.Server
+			logger.Printf("udp transport fallback to %s", srv)
+			dialers = append(dialers, func() (transport.Transport, error) {
+				return udp.Dial(srv)
+			})
+		}
+	}
+	if len(dialers) == 0 {
+		return nil, fmt.Errorf("client: no transport configured (set tls, raw_server or server)")
+	}
+
+	return func() (transport.Transport, error) {
+		var lastErr error
+		for _, d := range dialers {
+			t, err := d()
+			if err == nil {
+				return t, nil
+			}
+			lastErr = err
+			logger.Printf("transport attempt failed: %v", err)
+		}
+		return nil, lastErr
+	}, nil
+}
+
+// tlsDialer builds the TLS transport dialer for the client.
+func tlsDialer(cc *config.Client, logger *log.Logger) (func() (transport.Transport, error), error) {
 	var roots *x509.CertPool
 	insecure := false
 	if cc.TLS.CA != "" {
@@ -296,7 +339,6 @@ func clientDial(cc *config.Client, logger *log.Logger) (func() (transport.Transp
 	if fp == "" {
 		fp = "chrome"
 	}
-	logger.Printf("tls transport to %s (sni %s, fingerprint %s)", cc.Server, serverName, fp)
 	return func() (transport.Transport, error) {
 		return tlsx.Dial(cc.Server, serverName, roots, insecure, fp)
 	}, nil

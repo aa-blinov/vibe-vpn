@@ -1,8 +1,8 @@
 # Example client configuration. Copy to client.yaml and fill in keys from
 # `vibe-vpn keygen`.
 client:
-  server: SERVER_PUBLIC_IP:4433
-  # transport: raw   # udp (default) | tls | raw (obfs4-style, no TLS)
+  server: SERVER_PUBLIC_IP:443
+  # transport: udp   # udp (default) | tls | raw
   private_key: CHANGE_ME_CLIENT_PRIVATE_KEY
   # private_key_encrypted: <blob from `vibe-vpn keygen -encrypt`>  # passphrase-protected
   server_public_key: CHANGE_ME_SERVER_PUBLIC_KEY
@@ -18,6 +18,10 @@ client:
   rekey_after_packets: 268435456
   rekey_after_seconds: 180
   stats_interval: 15
+  # Optional obfs4-style TCP fallback (must match server `raw.listen`). If the
+  # primary transport (TLS/UDP) fails, the client transparently falls back to
+  # this one on each reconnect.
+  # raw_server: SERVER_PUBLIC_IP:4444
   # Prometheus metrics endpoint (loopback; empty disables).
   # metrics: 127.0.0.1:9090
   # Wire-level traffic shaping: uniform packet sizes, timing jitter and decoy

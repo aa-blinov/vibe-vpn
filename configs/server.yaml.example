@@ -1,8 +1,10 @@
 # Example server configuration. Copy to server.yaml and fill in keys from
 # `vibe-vpn keygen`.
 server:
-  listen: 0.0.0.0:4433
-  # transport: raw   # udp (default) | tls | raw (obfs4-style, no TLS)
+  # UDP datagram transport. Use 0.0.0.0:443 to rendezvous on the same port as
+  # TLS (UDP and TCP share the port, so tls.listen can also be 443).
+  listen: 0.0.0.0:443
+  # transport: udp   # udp (default) | tls | raw
   private_key: CHANGE_ME_SERVER_PRIVATE_KEY
   # private_key_encrypted: <blob from `vibe-vpn keygen -encrypt`>  # passphrase-protected
   interface: vpn0
@@ -30,10 +32,16 @@ server:
   # Optional TLS transport (HTTPS camouflage). Generate a certificate with:
   #   vibe-vpn certgen -out /etc/vibe-vpn/server -cn vpn.example.com
   # The same port answers normal HTTPS clients with a real HTTP response, so
-  # only tunnel clients (ALPN vibe/1) get the VPN.
+  # only tunnel clients (ALPN vibe/1) get the VPN. TCP and UDP can both use
+  # port 443 at the same time.
   # tls:
   #   listen: 0.0.0.0:443
   #   cert: /etc/vibe-vpn/server.crt
   #   key: /etc/vibe-vpn/server.key
+  # Optional obfs4-style raw TCP black hole (in addition to TLS/UDP), for
+  # clients that fall back with `raw_server`. Traffic is indistinguishable from
+  # random bytes.
+  # raw:
+  #   listen: 0.0.0.0:4444
   # Writes a pcap of the plaintext tunnel traffic to /tmp/vibe-vpn-server.pcap.
   # debug: /tmp/vibe-vpn-server

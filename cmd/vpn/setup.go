@@ -39,11 +39,12 @@ func setupServerCmd(args []string) error {
 	domain := fs.String("domain", "", "certificate name / SNI (DNS name or IP)")
 	tlsListen := fs.String("tls-listen", "0.0.0.0:443", "TLS listen address")
 	listen := fs.String("listen", "0.0.0.0:4433", "UDP listen (unused with TLS)")
+	rawListen := fs.String("raw-listen", "", "also listen on this obfs4-style raw TCP port (e.g. 0.0.0.0:4444)")
 	subnet := fs.String("subnet", "10.77.0.0/24", "tunnel subnet")
 	iface := fs.String("interface", "vpn0", "server tun interface")
 	_ = fs.Parse(args)
 
-	path, err := setupServerDir(*out, *domain, *tlsListen, *listen, *subnet, *iface)
+	path, err := setupServerDir(*out, *domain, *tlsListen, *listen, *rawListen, *subnet, *iface)
 	if err != nil {
 		return err
 	}
@@ -59,11 +60,12 @@ func setupClientCmd(args []string) error {
 	out := fs.String("out", ".", "output directory")
 	serverAddr := fs.String("server", "", "server host:port (TLS port)")
 	peer := fs.String("peer", "", "peer directory copied from server setup")
+	rawServer := fs.String("raw-server", "", "obfs4-style TCP fallback server host:port")
 	desync := fs.Bool("desync", false, "enable nfqws desync")
 	desyncBin := fs.String("nfqws", "/usr/local/bin/nfqws", "path to the nfqws binary")
 	_ = fs.Parse(args)
 
-	path, err := setupClientDir(*out, *serverAddr, *peer, *desync, *desyncBin)
+	path, err := setupClientDir(*out, *serverAddr, *peer, *rawServer, *desync, *desyncBin)
 	if err != nil {
 		return err
 	}
@@ -74,7 +76,7 @@ func setupClientCmd(args []string) error {
 
 // setupServerDir generates server keys, a TLS certificate and server.yaml in
 // out, and returns the path to server.yaml.
-func setupServerDir(out, domain, tlsListen, listen, subnet, iface string) (string, error) {
+func setupServerDir(out, domain, tlsListen, listen, rawListen, subnet, iface string) (string, error) {
 	if domain == "" {
 		return "", fmt.Errorf("-domain is required (DNS name or IP of the server)")
 	}
@@ -125,6 +127,9 @@ func setupServerDir(out, domain, tlsListen, listen, subnet, iface string) (strin
 			Key:    filepath.Join(abs, "server.key.pem"),
 		},
 	}
+	if rawListen != "" {
+		srv.Raw = &config.ServerRaw{Listen: rawListen}
+	}
 	path := filepath.Join(abs, "server.yaml")
 	if err := writeYAML(path, map[string]interface{}{"server": srv}); err != nil {
 		return "", err
@@ -134,7 +139,7 @@ func setupServerDir(out, domain, tlsListen, listen, subnet, iface string) (strin
 
 // setupClientDir generates client keys and client.yaml in out from the peer
 // directory produced by the server setup, and returns the path to client.yaml.
-func setupClientDir(out, serverAddr, peer string, desync bool, nfqws string) (string, error) {
+func setupClientDir(out, serverAddr, peer, rawServer string, desync bool, nfqws string) (string, error) {
 	if serverAddr == "" {
 		return "", fmt.Errorf("-server is required (host:port)")
 	}
@@ -177,6 +182,9 @@ func setupClientDir(out, serverAddr, peer string, desync bool, nfqws string) (st
 			ServerName: domain,
 			CA:         filepath.Join(peer, "server.crt"),
 		},
+	}
+	if rawServer != "" {
+		cli.RawServer = rawServer
 	}
 	if desync {
 		cli.Desync = &config.Desync{Enabled: true, NFQWS: nfqws, DPIDesync: "split2", SplitPos: "2"}

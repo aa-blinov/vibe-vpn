@@ -306,3 +306,264 @@ func TestTransportReplacement(t *testing.T) {
 		t.Skip("integration-only")
 	}
 }
+
+// TestRawFallback verifies the client's transport failover chain: the server
+// listens on both UDP and raw TCP, and a client configured with an unreachable
+// primary (TLS) and a raw_server fallback connects over the raw transport.
+func TestRawFallback(t *testing.T) {
+	mustHaveRoot(t)
+	cleanup()
+	t.Cleanup(cleanup)
+
+	bin := buildBinary(t)
+	spriv, spub := genKeys(t, bin)
+	cpriv, _ := genKeys(t, bin)
+
+	rawPort := "18444"
+	udpListen := lanServerIP + ":18443"
+	rawListen := lanServerIP + ":" + rawPort
+
+	srvCfg := fmt.Sprintf(`server:
+  listen: %s
+  private_key: %s
+  interface: %s
+  subnet: %s
+  nat: false
+  raw:
+    listen: %s
+  stats_interval: 30
+`, udpListen, spriv, serverIf, tunSubnet, rawListen)
+	// Primary transport points at a dead TLS endpoint; the raw_server fallback
+	// is the real one. The client must fall back to raw TCP.
+	cliCfg := fmt.Sprintf(`client:
+  server: %s:1
+  private_key: %s
+  server_public_key: %s
+  mtu: 1280
+  raw_server: %s
+  setup_routing: true
+  stats_interval: 30
+`, lanServerIP, cpriv, spub, rawListen)
+	srvPath := filepath.Join(t.TempDir(), "server.yaml")
+	cliPath := filepath.Join(t.TempDir(), "client.yaml")
+	writeConfig(t, srvPath, srvCfg)
+	writeConfig(t, cliPath, cliCfg)
+
+	if err := runCmd("ip", "netns", "add", netnsName); err != nil {
+		t.Fatalf("netns: %v", err)
+	}
+	if err := runCmd("ip", "link", "add", hostVeth, "type", "veth", "peer", "name", nsVeth); err != nil {
+		t.Fatalf("veth: %v", err)
+	}
+	if err := runCmd("ip", "link", "set", nsVeth, "netns", netnsName); err != nil {
+		t.Fatalf("move veth into ns: %v", err)
+	}
+	if err := runCmd("ip", "addr", "add", lanServerIP+"/24", "dev", hostVeth); err != nil {
+		t.Fatalf("host veth addr: %v", err)
+	}
+	if err := runCmd("ip", "link", "set", hostVeth, "up"); err != nil {
+		t.Fatalf("host veth up: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "addr", "add", lanClientIP+"/24", "dev", nsVeth); err != nil {
+		t.Fatalf("ns veth addr: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "link", "set", nsVeth, "up"); err != nil {
+		t.Fatalf("ns veth up: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "link", "set", "lo", "up"); err != nil {
+		t.Fatalf("ns lo up: %v", err)
+	}
+
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "iifname", hostVeth, "accept", "comment", nftMarker)
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "iifname", serverIf, "accept", "comment", nftMarker)
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "ip", "protocol", "icmp", "accept", "comment", nftMarker)
+
+	srv := exec.Command(bin, "server", "--config", srvPath, "--no-nat")
+	srvOut, err := os.Create(filepath.Join(t.TempDir(), "server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvOut.Close()
+	srv.Stdout, srv.Stderr = srvOut, srvOut
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Process.Kill() }()
+
+	time.Sleep(500 * time.Millisecond)
+	if err := srv.Process.Signal(os.Signal(syscall.Signal(0))); err != nil {
+		sbuf := readLog(srvOut.Name())
+		t.Fatalf("server died on startup:\n%s", sbuf)
+	}
+
+	cli := exec.Command("ip", "netns", "exec", netnsName, bin, "client", "--config", cliPath)
+	cliOut, err := os.Create(filepath.Join(t.TempDir(), "client.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cliOut.Close()
+	cli.Stdout, cli.Stderr = cliOut, cliOut
+	if err := cli.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cli.Process.Kill() }()
+
+	// The client should fall back to the raw transport and establish the TUN.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		out, _ := exec.Command("ip", "netns", "exec", netnsName,
+			"ip", "addr", "show", "dev", "vibe0").Output()
+		if strings.Contains(string(out), "10.77.0.") {
+			break
+		}
+		if time.Now().After(deadline) {
+			cbuf := readLog(cliOut.Name())
+			sbuf := readLog(srvOut.Name())
+			t.Fatalf("raw fallback never connected;\nclient log:\n%s\nserver log:\n%s", cbuf, sbuf)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	out, err := exec.Command("ip", "netns", "exec", netnsName,
+		"ping", "-c", "3", "-W", "2", "10.77.0.1").CombinedOutput()
+	if err != nil {
+		buf := readLog(cliOut.Name())
+		t.Fatalf("ping failed over raw: %v\n%s\nclient log:\n%s", err, out, buf)
+	}
+	if !strings.Contains(string(out), "3 received") {
+		t.Fatalf("ping over raw did not receive all replies:\n%s", out)
+	}
+}
+
+// TestQuickLifecycle verifies the wg-quick-style `quick up|status|down` client
+// lifecycle: `quick up` starts a background daemon, `quick status` reports it,
+// and `quick down` stops it (the TUN disappears).
+func TestQuickLifecycle(t *testing.T) {
+	mustHaveRoot(t)
+	cleanup()
+	t.Cleanup(cleanup)
+
+	bin := buildBinary(t)
+	spriv, spub := genKeys(t, bin)
+	cpriv, _ := genKeys(t, bin)
+
+	srvCfg := fmt.Sprintf(`server:
+  listen: %s
+  private_key: %s
+  interface: %s
+  subnet: %s
+  nat: false
+  stats_interval: 30
+`, listenAddr, spriv, serverIf, tunSubnet)
+	dir := t.TempDir()
+	ctlSock := filepath.Join(dir, "client.sock")
+	cliCfg := fmt.Sprintf(`client:
+  server: %s
+  private_key: %s
+  server_public_key: %s
+  mtu: 1280
+  ctl: %s
+  setup_routing: true
+  stats_interval: 30
+`, listenAddr, cpriv, spub, ctlSock)
+	srvPath := filepath.Join(dir, "server.yaml")
+	cliPath := filepath.Join(dir, "client.yaml")
+	writeConfig(t, srvPath, srvCfg)
+	writeConfig(t, cliPath, cliCfg)
+
+	if err := runCmd("ip", "netns", "add", netnsName); err != nil {
+		t.Fatalf("netns: %v", err)
+	}
+	if err := runCmd("ip", "link", "add", hostVeth, "type", "veth", "peer", "name", nsVeth); err != nil {
+		t.Fatalf("veth: %v", err)
+	}
+	if err := runCmd("ip", "link", "set", nsVeth, "netns", netnsName); err != nil {
+		t.Fatalf("move veth into ns: %v", err)
+	}
+	if err := runCmd("ip", "addr", "add", lanServerIP+"/24", "dev", hostVeth); err != nil {
+		t.Fatalf("host veth addr: %v", err)
+	}
+	if err := runCmd("ip", "link", "set", hostVeth, "up"); err != nil {
+		t.Fatalf("host veth up: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "addr", "add", lanClientIP+"/24", "dev", nsVeth); err != nil {
+		t.Fatalf("ns veth addr: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "link", "set", nsVeth, "up"); err != nil {
+		t.Fatalf("ns veth up: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "link", "set", "lo", "up"); err != nil {
+		t.Fatalf("ns lo up: %v", err)
+	}
+
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "iifname", hostVeth, "accept", "comment", nftMarker)
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "iifname", serverIf, "accept", "comment", nftMarker)
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "ip", "protocol", "icmp", "accept", "comment", nftMarker)
+
+	srv := exec.Command(bin, "server", "--config", srvPath, "--no-nat")
+	srvOut, err := os.Create(filepath.Join(dir, "server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvOut.Close()
+	srv.Stdout, srv.Stderr = srvOut, srvOut
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Process.Kill() }()
+	time.Sleep(500 * time.Millisecond)
+
+	// Start the client daemon with `quick up` inside the namespace.
+	if out, err := runInNSOut(netnsName, bin, "quick", "up", "--config", cliPath); err != nil {
+		t.Fatalf("quick up: %v: %s", err, out)
+	}
+	defer func() {
+		_ = runInNS(netnsName, bin, "quick", "down", "--config", cliPath)
+		_ = runCmd("pkill", "-f", "vpn client")
+	}()
+
+	// Wait for the TUN to come up.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		out, _ := exec.Command("ip", "netns", "exec", netnsName,
+			"ip", "addr", "show", "dev", "vibe0").Output()
+		if strings.Contains(string(out), "10.77.0.") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("quick up: tunnel never came up; client log:\n%s", readLog(ctlSock+".log"))
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// `quick status` should report the running daemon.
+	if out, err := runInNSOut(netnsName, bin, "quick", "status", "--config", cliPath); err != nil {
+		t.Fatalf("quick status: %v: %s", err, out)
+	} else if !strings.Contains(out, "role=client") {
+		t.Fatalf("quick status unexpected output:\n%s", out)
+	}
+
+	// `quick down` should stop the daemon and drop the TUN.
+	if _, err := runInNSOut(netnsName, bin, "quick", "down", "--config", cliPath); err != nil {
+		t.Fatalf("quick down: %v", err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		out, _ := exec.Command("ip", "netns", "exec", netnsName,
+			"ip", "addr", "show", "dev", "vibe0").Output()
+		if !strings.Contains(string(out), "10.77.0.") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("quick down: TUN interface still present after stop")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// runInNSOut runs a command in a namespace and returns its combined output.
+func runInNSOut(ns string, args ...string) (string, error) {
+	full := append([]string{"ip", "netns", "exec", ns}, args...)
+	out, err := exec.Command(full[0], full[1:]...).CombinedOutput()
+	return string(out), err
+}

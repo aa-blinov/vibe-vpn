@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/netip"
@@ -36,6 +37,7 @@ func runServer(args []string) error {
 	sDomain := fs.String("domain", "", "auto-setup: certificate name / SNI")
 	sTLSListen := fs.String("tls-listen", "0.0.0.0:443", "auto-setup: TLS listen address")
 	sListen := fs.String("listen", "0.0.0.0:4433", "auto-setup: UDP listen (unused with TLS)")
+	sRawListen := fs.String("raw-listen", "", "auto-setup: also listen on this obfs4-style raw TCP port")
 	sSubnet := fs.String("subnet", "10.77.0.0/24", "auto-setup: tunnel subnet")
 	sIface := fs.String("interface", "vpn0", "auto-setup: server tun interface")
 	sOut := fs.String("out", "./vibe-vpn-server", "auto-setup: output directory")
@@ -43,7 +45,7 @@ func runServer(args []string) error {
 
 	if *cfgPath == "" {
 		// One-command mode: generate everything, then run.
-		generated, err := setupServerDir(*sOut, *sDomain, *sTLSListen, *sListen, *sSubnet, *sIface)
+		generated, err := setupServerDir(*sOut, *sDomain, *sTLSListen, *sListen, *sRawListen, *sSubnet, *sIface)
 		if err != nil {
 			return err
 		}
@@ -125,6 +127,9 @@ func runServer(args []string) error {
 	}
 	mgr.SetTUN(iface)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Optional control socket for `vibe-vpn status`.
 	var ctlSrv *ctl.Server
 	if sc.Ctl != "" {
@@ -133,7 +138,7 @@ func runServer(args []string) error {
 			txp, txb, rxp, rxb := mgr.Traffic()
 			return fmt.Sprintf("sessions=%d handshakes=%d dropped=%d tx=%d/%d rx=%d/%d",
 				st.Sessions.Load(), st.Handshakes.Load(), st.Dropped.Load(), txp, txb, rxp, rxb)
-		})
+		}, stop)
 		if err != nil {
 			return err
 		}
@@ -202,42 +207,54 @@ func runServer(args []string) error {
 		}
 	}()
 
-	// Control plane: bind the transport (raw TCP, TLS or UDP).
+	// Control plane: bind every configured transport concurrently. The server
+	// can serve UDP, TLS and raw TCP on different ports at the same time, so
+	// clients can fall back between transports (see client `raw_server`).
 	shp := shaping(sc.Shaping)
-	if sc.Transport == "raw" {
-		rs, err := rawtcp.Listen(sc.Listen)
-		if err != nil {
-			return err
+	onConn := func(t transport.Transport) bool {
+		return mgr.HandleTransport(framing.Jitter(t, shp.Jitter))
+	}
+	var listeners []io.Closer
+	closeAll := func() {
+		for _, l := range listeners {
+			_ = l.Close()
 		}
-		defer rs.Close()
-		rs.SetOnConn(func(t transport.Transport) bool {
-			return mgr.HandleTransport(framing.Jitter(t, shp.Jitter))
-		})
-		logger.Printf("raw listening on %s (subnet %s)", sc.Listen, subnet)
-	} else if sc.TLS != nil {
-		ts, err := tlsx.Listen(sc.TLS.Listen, sc.TLS.Cert, sc.TLS.Key)
-		if err != nil {
-			return err
-		}
-		defer ts.Close()
-		ts.SetOnConn(func(t transport.Transport) bool {
-			return mgr.HandleTransport(framing.Jitter(t, shp.Jitter))
-		})
-		logger.Printf("tls listening on %s (subnet %s)", sc.TLS.Listen, subnet)
-	} else {
+	}
+	defer closeAll()
+
+	serveUDP := sc.Transport != "raw" && sc.Transport != "tls"
+	if serveUDP && sc.Listen != "" {
 		us, err := udp.Listen(sc.Listen)
 		if err != nil {
 			return err
 		}
-		defer us.Close()
+		listeners = append(listeners, us)
 		us.SetOnNewPeer(func(_ netip.AddrPort, t transport.Transport) bool {
-			return mgr.HandleTransport(framing.Jitter(t, shp.Jitter))
+			return onConn(t)
 		})
-		logger.Printf("listening on %s (subnet %s)", sc.Listen, subnet)
+		logger.Printf("udp listening on %s (subnet %s)", sc.Listen, subnet)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	if sc.TLS != nil {
+		ts, err := tlsx.Listen(sc.TLS.Listen, sc.TLS.Cert, sc.TLS.Key)
+		if err != nil {
+			return err
+		}
+		listeners = append(listeners, ts)
+		ts.SetOnConn(onConn)
+		logger.Printf("tls listening on %s (subnet %s)", sc.TLS.Listen, subnet)
+	}
+	if sc.Raw != nil {
+		rs, err := rawtcp.Listen(sc.Raw.Listen)
+		if err != nil {
+			return err
+		}
+		listeners = append(listeners, rs)
+		rs.SetOnConn(onConn)
+		logger.Printf("raw listening on %s (subnet %s)", sc.Raw.Listen, subnet)
+	}
+	if len(listeners) == 0 {
+		return fmt.Errorf("server: no transport configured (set listen, tls or raw)")
+	}
 
 	// SIGUSR1 dumps current statistics on demand.
 	usr1 := statsSignals()

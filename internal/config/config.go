@@ -36,6 +36,7 @@ type Client struct {
 	SessionTimeout      int        `yaml:"session_timeout,omitempty"`
 	RekeyAfterPackets   uint64     `yaml:"rekey_after_packets,omitempty"`
 	RekeyAfterSeconds   int        `yaml:"rekey_after_seconds,omitempty"`
+	RawServer           string     `yaml:"raw_server,omitempty"` // optional obfs4-style TCP fallback (host:port)
 	SetupRouting        bool       `yaml:"setup_routing"`
 	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
 	Ctl                 string     `yaml:"ctl,omitempty"`     // unix socket path for `vibe-vpn status`
@@ -95,9 +96,17 @@ type Server struct {
 	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
 	Ctl                 string     `yaml:"ctl,omitempty"`     // unix socket path for `vibe-vpn status`
 	TLS                 *ServerTLS `yaml:"tls,omitempty"`
+	Raw                 *ServerRaw `yaml:"raw,omitempty"` // optional obfs4-style TCP black hole
 	Shaping             Shaping    `yaml:"shaping,omitempty"`
 	Debug               string     `yaml:"debug,omitempty"`
 	StatsInterval       int        `yaml:"stats_interval,omitempty"`
+}
+
+// ServerRaw configures the optional bare-TCP (obfs4-style) listener. When
+// present it runs in addition to any TLS/UDP listener, so clients can fall back
+// between transports.
+type ServerRaw struct {
+	Listen string `yaml:"listen,omitempty"`
 }
 
 // ServerTLS configures the TLS transport on the server.
@@ -230,6 +239,11 @@ func (c *Client) Validate() error {
 			}
 		}
 	}
+	if c.RawServer != "" {
+		if _, _, err := net.SplitHostPort(c.RawServer); err != nil {
+			return fmt.Errorf("client: raw_server %q: %w", c.RawServer, err)
+		}
+	}
 	if err := validateTransport(c.Transport, c.TLS != nil); err != nil {
 		return err
 	}
@@ -266,6 +280,11 @@ func (s *Server) Validate() error {
 		}
 		if st, err := os.Stat(s.TLS.Key); err != nil || st.IsDir() {
 			return fmt.Errorf("server: tls.key %q: %w", s.TLS.Key, err)
+		}
+	}
+	if s.Raw != nil {
+		if s.Raw.Listen == "" {
+			return errors.New("server: raw requires listen")
 		}
 	}
 	if err := validateTransport(s.Transport, s.TLS != nil); err != nil {
