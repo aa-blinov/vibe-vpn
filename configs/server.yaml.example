@@ -20,6 +20,9 @@ server:
   mtu: 1280
   keepalive_interval: 10
   session_timeout: 300
+  # Max concurrent clients (default 1024). With the default /24 subnet the
+  # practical limit is 253 addresses, so a /16 supports up to 1024.
+  max_sessions: 1024
   stats_interval: 15
   # Prometheus metrics endpoint (loopback; empty disables).
   # metrics: 127.0.0.1:9090

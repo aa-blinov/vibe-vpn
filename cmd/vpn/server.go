@@ -118,7 +118,7 @@ func runServer(args []string) error {
 		SessionTimeout:   time.Duration(sc.SessionTimeout) * time.Second,
 		HandshakeTimeout: time.Duration(config.DefaultHandshakeTimeout) * time.Second,
 		Peers:            peers,
-		MaxSessions:      session.DefaultMaxSessions,
+		MaxSessions:      sc.MaxSessions,
 		Shaping:          shaping(sc.Shaping),
 		Log:              logger,
 	})

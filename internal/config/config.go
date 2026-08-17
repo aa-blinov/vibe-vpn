@@ -9,6 +9,8 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/aa-blinov/vibe-vpn/internal/session"
 )
 
 // Defaults shared by both roles.
@@ -95,6 +97,7 @@ type Server struct {
 	SessionTimeout      int        `yaml:"session_timeout,omitempty"`
 	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
 	Ctl                 string     `yaml:"ctl,omitempty"`     // unix socket path for `vibe-vpn status`
+	MaxSessions         int        `yaml:"max_sessions,omitempty"` // max concurrent clients (default 1024)
 	TLS                 *ServerTLS `yaml:"tls,omitempty"`
 	Raw                 *ServerRaw `yaml:"raw,omitempty"` // optional obfs4-style TCP black hole
 	Shaping             Shaping    `yaml:"shaping,omitempty"`
@@ -206,6 +209,9 @@ func (s *Server) ApplyDefaults() {
 	if s.StatsInterval == 0 {
 		s.StatsInterval = DefaultStatsInterval
 	}
+	if s.MaxSessions == 0 {
+		s.MaxSessions = session.DefaultMaxSessions
+	}
 }
 
 // Validate checks the client configuration for obvious problems.
@@ -270,6 +276,9 @@ func (s *Server) Validate() error {
 	if s.SessionTimeout > 0 && s.Keepalive >= s.SessionTimeout {
 		return fmt.Errorf("server: keepalive_interval (%ds) must be smaller than session_timeout (%ds)",
 			s.Keepalive, s.SessionTimeout)
+	}
+	if s.MaxSessions < 0 {
+		return fmt.Errorf("server: max_sessions %d must be non-negative", s.MaxSessions)
 	}
 	if s.TLS != nil {
 		if s.TLS.Listen == "" || s.TLS.Cert == "" || s.TLS.Key == "" {

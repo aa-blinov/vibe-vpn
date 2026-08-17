@@ -11,6 +11,7 @@ import (
 
 	"github.com/aa-blinov/vibe-vpn/internal/config"
 	"github.com/aa-blinov/vibe-vpn/internal/crypto"
+	"github.com/aa-blinov/vibe-vpn/internal/session"
 	"github.com/aa-blinov/vibe-vpn/internal/transport/tlsx"
 )
 
@@ -117,6 +118,7 @@ func setupServerDir(out, domain, tlsListen, listen, rawListen, subnet, iface str
 		MTU:               config.DefaultMTU,
 		Keepalive:         10, // fresh NAT state and fewer DPI idle-cuts than the 20s default
 		SessionTimeout:    config.DefaultSessionTimeout,
+		MaxSessions:       session.DefaultMaxSessions,
 		// Quality default: pad server->client bulk to fixed buckets and emit
 		// decoy frames when idle, so the flow resists passive fingerprinting.
 		Shaping: config.Shaping{Padding: "bucket", Bucket: 128, DecoyIntervalS: 2},

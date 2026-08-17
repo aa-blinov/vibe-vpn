@@ -567,3 +567,150 @@ func runInNSOut(ns string, args ...string) (string, error) {
 	out, err := exec.Command(full[0], full[1:]...).CombinedOutput()
 	return string(out), err
 }
+
+// TestMultiClientParallel verifies the server serves several clients at once:
+// three clients connect concurrently, each is assigned a distinct tunnel
+// address, and each client's tunnel passes traffic to the gateway.
+func TestMultiClientParallel(t *testing.T) {
+	mustHaveRoot(t)
+	cleanup()
+	t.Cleanup(cleanup)
+
+	bin := buildBinary(t)
+	spriv, spub := genKeys(t, bin)
+
+	const nClients = 3
+
+	dir := t.TempDir()
+
+	// One server, three independent client keypairs.
+	srvCtl := filepath.Join(dir, "server.sock")
+	srvCfg := fmt.Sprintf(`server:
+  listen: %s
+  private_key: %s
+  interface: %s
+  subnet: %s
+  nat: false
+  max_sessions: %d
+  ctl: %s
+  stats_interval: 30
+`, listenAddr, spriv, serverIf, tunSubnet, nClients+2, srvCtl)
+	srvPath := filepath.Join(dir, "server.yaml")
+	writeConfig(t, srvPath, srvCfg)
+
+	// Netns + veth + firewall (same harness as the other tests).
+	if err := runCmd("ip", "netns", "add", netnsName); err != nil {
+		t.Fatalf("netns: %v", err)
+	}
+	if err := runCmd("ip", "link", "add", hostVeth, "type", "veth", "peer", "name", nsVeth); err != nil {
+		t.Fatalf("veth: %v", err)
+	}
+	if err := runCmd("ip", "link", "set", nsVeth, "netns", netnsName); err != nil {
+		t.Fatalf("move veth into ns: %v", err)
+	}
+	if err := runCmd("ip", "addr", "add", lanServerIP+"/24", "dev", hostVeth); err != nil {
+		t.Fatalf("host veth addr: %v", err)
+	}
+	if err := runCmd("ip", "link", "set", hostVeth, "up"); err != nil {
+		t.Fatalf("host veth up: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "addr", "add", lanClientIP+"/24", "dev", nsVeth); err != nil {
+		t.Fatalf("ns veth addr: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "link", "set", nsVeth, "up"); err != nil {
+		t.Fatalf("ns veth up: %v", err)
+	}
+	if err := runInNS(netnsName, "ip", "link", "set", "lo", "up"); err != nil {
+		t.Fatalf("ns lo up: %v", err)
+	}
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "iifname", hostVeth, "accept", "comment", nftMarker)
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "iifname", serverIf, "accept", "comment", nftMarker)
+	_ = runCmd("nft", "insert", "rule", "ip", "filter", "INPUT", "ip", "protocol", "icmp", "accept", "comment", nftMarker)
+
+	// Start the server.
+	srv := exec.Command(bin, "server", "--config", srvPath, "--no-nat")
+	srvOut, err := os.Create(filepath.Join(dir, "server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvOut.Close()
+	srv.Stdout, srv.Stderr = srvOut, srvOut
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Process.Kill() }()
+	time.Sleep(500 * time.Millisecond)
+
+	// Start nClients concurrently.
+	for i := 0; i < nClients; i++ {
+		_, cpriv := genKeys(t, bin)
+		cliCfg := fmt.Sprintf(`client:
+  server: %s
+  private_key: %s
+  server_public_key: %s
+  mtu: 1280
+  setup_routing: true
+  stats_interval: 30
+`, listenAddr, cpriv, spub)
+		cliPath := filepath.Join(dir, fmt.Sprintf("client%d.yaml", i))
+		writeConfig(t, cliPath, cliCfg)
+
+		cli := exec.Command("ip", "netns", "exec", netnsName, bin, "client", "--config", cliPath)
+		cl, err := os.Create(filepath.Join(dir, fmt.Sprintf("client%d.log", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		cli.Stdout, cli.Stderr = cl, cl
+		if err := cli.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = cli.Process.Kill() }()
+	}
+
+	// Wait until nClients distinct tunnel addresses are present.
+	deadline := time.Now().Add(25 * time.Second)
+	addrCount := func() int {
+		out, _ := exec.Command("ip", "netns", "exec", netnsName,
+			"ip", "addr", "show").Output()
+		n := 0
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "inet ") && strings.Contains(line, "10.77.0.") {
+				n++
+			}
+		}
+		return n
+	}
+	for {
+		if addrCount() >= nClients {
+			break
+		}
+		if time.Now().After(deadline) {
+			var logs []string
+			for i := 0; i < nClients; i++ {
+				logs = append(logs, fmt.Sprintf("client%d:\n%s", i, readLog(filepath.Join(dir, fmt.Sprintf("client%d.log", i)))))
+			}
+			t.Fatalf("only %d/%d clients connected;\n%s\nserver log:\n%s", addrCount(), nClients, strings.Join(logs, "\n"), readLog(srvOut.Name()))
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// Each client's tunnel carries traffic to the gateway.
+	out, err := exec.Command("ip", "netns", "exec", netnsName,
+		"ping", "-c", "3", "-W", "2", "10.77.0.1").CombinedOutput()
+	if err != nil {
+		t.Fatalf("parallel ping failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "3 received") {
+		t.Fatalf("parallel ping did not get 3 replies:\n%s", out)
+	}
+
+	// The server should report nClients live sessions via its control socket.
+	st := exec.Command(bin, "status", "--config", srvPath)
+	if so, err := st.CombinedOutput(); err != nil {
+		t.Fatalf("status: %v: %s", err, so)
+	} else if !strings.Contains(string(so), fmt.Sprintf("sessions=%d", nClients)) {
+		t.Fatalf("expected %d sessions in status, got:\n%s", nClients, so)
+	}
+}
