@@ -95,8 +95,8 @@ type Server struct {
 	MTU                 int        `yaml:"mtu"`
 	Keepalive           int        `yaml:"keepalive_interval,omitempty"`
 	SessionTimeout      int        `yaml:"session_timeout,omitempty"`
-	Metrics             string     `yaml:"metrics,omitempty"` // loopback address for /metrics
-	Ctl                 string     `yaml:"ctl,omitempty"`     // unix socket path for `vibe-vpn status`
+	Metrics             string     `yaml:"metrics,omitempty"`      // loopback address for /metrics
+	Ctl                 string     `yaml:"ctl,omitempty"`          // unix socket path for `vibe-vpn status`
 	MaxSessions         int        `yaml:"max_sessions,omitempty"` // max concurrent clients (default 1024)
 	TLS                 *ServerTLS `yaml:"tls,omitempty"`
 	Raw                 *ServerRaw `yaml:"raw,omitempty"` // optional obfs4-style TCP black hole
