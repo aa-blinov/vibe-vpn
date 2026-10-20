@@ -1,746 +1,273 @@
 # vibe-vpn
 
-A compact, readable research prototype of a VPN protocol. It is deliberately
-small so the cryptographic/session layer can be studied and modified, and — most
-importantly — so the **transport layer can be swapped out independently** for
-experiments with framing, padding, packet sizes, multiplexing, scheduling and
-passive-traffic characteristics in a lab environment.
+vibe-vpn builds a point-to-point IPv4 tunnel between a Linux server and a
+client, and keeps the carrier under that tunnel separate from the session
+above it. The tunnel runs over UDP, over TLS with a browser-shaped
+ClientHello, or over a bare TCP port that answers with random bytes, and any
+of the three can be swapped without touching the handshake or the keys. It is
+a research prototype for traffic-shaping experiments, and the threat model
+under `docs/` states plainly where the guarantees stop.
 
-The project does **not** implement its own cryptography. It delegates to the
-Noise Protocol Framework (`Noise_XK_25519_ChaChaPoly_SHA256`):
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Build](https://github.com/aa-blinov/vibe-vpn/actions/workflows/ci.yml/badge.svg)](https://github.com/aa-blinov/vibe-vpn/actions/workflows/ci.yml)
 
-- **X25519** key agreement (DH25519),
-- **ChaCha20-Poly1305** AEAD for every message,
-- **SHA-256** for transcript hashing,
-- `crypto/rand` for all randomness,
-- separate send/receive keys derived by the Noise handshake.
+---
 
-## Architecture
+## Quick start
 
-```
- TUN interface                             TUN interface
-      │                                         ▲
-      ▼                                         │
- ┌──────────────┐  session layer:       ┌──────────────┐
- │  client      │  handshake (Noise XK) │  server      │
- │  session     │  keys, sequence       │  session     │
- │              │  numbers, replay      │              │
- │  keys        │  window, keepalive,   │  keys        │
- │  (send/recv) │  rekey, reconnect     │  (send/recv) │
- └──────┬───────┘                       └──────┬───────┘
-        │                                     │
-        ▼                                     ▼
-   framing + AEAD                       framing + AEAD
-        │                                     │
-        ▼                                     ▼
- ┌─────────────────────────────────────────────────────┐
- │                pluggable transports                 │
- │           udp   |   tls   |   raw                   │
- └─────────────────────────────────────────────────────┘
-        │                                     │
-        ▼                                     ▼
-        network                             network
+Two Linux machines with root and `/dev/net/tun`: one on a public host, one
+on the client.
+
+```bash
+make build
 ```
 
-The single most important boundary is the transport interface
-(`internal/transport/transport.go`):
+On the server, which writes the key, a self-signed certificate and
+`server.yaml`, then starts listening:
+
+```bash
+sudo ./bin/vibe-vpn server --domain vpn.example.com --out /etc/vibe-vpn-server
+```
+
+Copy `/etc/vibe-vpn-server` to the client machine. On the client, which
+generates its own key, writes `client.yaml` and connects:
+
+```bash
+sudo ./bin/vibe-vpn client --server vpn.example.com:443 --peer /etc/vibe-vpn-server --out /etc/vibe-vpn-client
+```
+
+Check it from the client machine:
+
+```bash
+ping 10.77.0.1
+```
+
+`10.77.0.1` is the server's tunnel gateway, the first usable address of the
+default `10.77.0.0/24` subnet.
+
+`vibe-vpn.sh` asks the same questions interactively and can install the
+systemd unit for you:
+
+```bash
+./vibe-vpn.sh server    # on the server
+./vibe-vpn.sh client    # on the client
+```
+
+Releases are published for linux/amd64, linux/arm64 and windows/amd64 as
+tarballs, `.deb`, `.rpm` and a Windows zip. The installer picks the latest
+release and verifies its SHA-256:
+
+```bash
+curl -fsSL https://aa-blinov.github.io/vibe-vpn/install | bash
+```
+
+| Platform | Role | What it needs |
+| --- | --- | --- |
+| Linux | server and client | root, `/dev/net/tun`, `iproute2`, `nftables` for NAT |
+| Windows | client only | Administrator, `wintun.dll` beside the binary |
+
+The server is Linux-only. The Windows client runs the same protocol, the
+same session layer and the same three carriers.
+
+## What it does
+
+- **Carries IPv4 through a TUN device.** The client and the server each open
+  a tunnel interface, and the server hands the client an address out of a
+  pool inside the tunnel subnet. IPv6 is dropped and counted; there is no
+  IPv6 support in this version.
+- **Encrypts with the Noise protocol.** The handshake is
+  `Noise_XK_25519_ChaChaPoly_SHA256`: X25519 key agreement,
+  ChaCha20-Poly1305 for every frame, SHA-256 for the transcript, and
+  `crypto/rand` for every nonce and ephemeral. No cryptographic primitive is
+  implemented in this repository.
+- **Keeps the wire structureless.** A session frame is a 12-byte random
+  nonce followed by a ChaCha20-Poly1305 ciphertext. The message type, the
+  sequence number and the payload length live inside the ciphertext, so
+  nothing on the wire has a fixed shape.
+- **Rejects replays and out-of-order frames.** The receiver keeps an
+  RFC 6479-style sliding window of 2048 sequence numbers, and advances it
+  only after a frame authenticates.
+- **Rotates the keys.** After a configured number of packets or seconds, the
+  client runs a fresh Noise handshake inside the live session and both sides
+  swap to the new keys and a new sequence space.
+- **Recovers on its own.** A session with no traffic for `session_timeout`
+  seconds is closed, the client reconnects, and a client that comes back
+  with the same static key gets its previous address back.
+- **Shapes the traffic.** Padding policies (`none`, `pad`, `bucket`,
+  `random`, `web`), a random delay before each send, and encrypted cover
+  frames when the sender is idle. The `web` policy samples wire sizes from
+  the distribution of real TLS records.
+- **Carries the tunnel over UDP, TLS or bare TCP.** The TLS carrier imitates
+  a browser ClientHello through uTLS and answers probes with a real HTTP
+  response. The raw carrier has no banner, no ALPN and no handshake of its
+  own, and the server closes a connection whose Noise handshake never
+  completes.
+- **Falls back between carriers.** The client tries its configured
+  transports in order on every reconnect, so a blocked primary is followed by
+  the next one without operator action.
+- **Runs as a service.** `vibe-vpn quick up|down|status` manages the client
+  as a background daemon, systemd units ship for both roles, and
+  `vibe-vpn status` reads a running daemon through a control socket.
+- **Reports.** A statistics line every `stats_interval` seconds, a snapshot
+  on `SIGUSR1`, a peer-allowlist reload on the server's `SIGHUP`, and a
+  Prometheus endpoint on `/metrics` bound to a loopback address.
+- **Desyncs DPI on the client.** The client can install an nftables queue
+  rule for its own TCP flow and run `nfqws` from zapret against it, so the
+  connection to the server is harder for a passive inspector to recognise.
+
+## How it works
+
+```
+  TUN device            session layer                framing            transport
+  ┌──────────┐  IP      ┌──────────────────┐          ┌───────────┐      ┌──────────┐
+  │ packets  │ ──────► │ Noise XK handshake│ ──────► │ AEAD      │ ───► │ udp      │
+  │          │          │ keys, sequence   │  frames │ padding   │      │ tls      │
+  │          │ ◄────── │ replay window    │ ◄────── │ jitter    │ ◄─── │ raw tcp  │
+  └──────────┘          └──────────────────┘          └───────────┘      └──────────┘
+```
+
+The boundary that makes the project work is the transport interface in
+`internal/transport/transport.go`:
 
 ```go
 type Transport interface {
-	Send([]byte) error
-	Receive() ([]byte, error)
-	Close() error
+    Send([]byte) error
+    Receive() ([]byte, error)
+    Close() error
 }
 ```
 
-The session layer never touches sockets, buffers, MTU or framing policy. The
-UDP implementation lives in `internal/transport/udp`. A future TCP/TLS/QUIC
-transport, or an experiment with a new framing/padding layer, only needs to
-satisfy this interface.
+The session layer never touches a socket, a buffer, the MTU or a padding
+policy. A new carrier is one file that satisfies this interface, and
+`framing.Jitter` wraps any carrier with a random delay.
 
-### Package map
-
-| Package                        | Responsibility                                                        |
-|--------------------------------|-----------------------------------------------------------------------|
-| `cmd/vibe-vpn`                      | CLI: `server`, `client`, `keygen`                                     |
-| `internal/config`              | YAML configuration + defaults                                         |
-| `internal/crypto`              | Noise XK handshake wrapper, key management                            |
-| `internal/framing`             | Obfuscated frame format, padding policy, jitter decorator            |
-| `internal/protocol`            | Message types and the anti-replay sliding window                     |
-| `internal/session`             | Session state machine: handshake, AEAD keys, keepalive, rekey, reconnect |
-| `internal/transport`           | The pluggable `Transport` interface                                   |
-| `internal/transport/udp`       | UDP client and multi-client server demultiplexer                      |
-| `internal/transport/tlsx`      | TLS/HTTPS-camouflage transport (ALPN routing, fake HTTP)             |
-| `internal/transport/rawtcp`    | obfs4-style raw transport (no TLS, black-hole server)                |
-| `internal/transport/framed`    | shared length-prefix framing for stream transports                   |
-| `internal/desync`              | nfqws-based DPI desync of the tunnel's own TCP flow (zapret)        |
-| `internal/tun`                 | Linux TUN device (raw syscalls, no dependencies)                      |
-| `internal/routing`             | `ip`/`sysctl`/`nft` commands for TUN address, routes and NAT          |
-| `internal/ippkt`               | Minimal IPv4 header parsing                                           |
-| `internal/pcap`                | Debug capture in classic pcap format                                  |
-
-### Wire format
-
-There is **no plaintext protocol header**. Everything a passive observer can
-read off the wire is indistinguishable from random bytes:
-
-- **Handshake messages** (initial Noise XK handshake) are raw Noise messages,
-  no framing at all.
-- **Session messages** (data, keepalive, close, assign, rekey, decoy) are:
+A session frame on the wire:
 
 ```
 [nonce: 12 random bytes][ChaCha20-Poly1305 ciphertext]
 ```
 
-The ciphertext protects an inner plaintext whose metadata is encrypted:
+and the plaintext inside that ciphertext:
 
 ```
 [session tag: 4][type: 1][seq: 4][payload length: 2][payload][padding...]
 ```
 
-Each packet begins with a fresh random nonce, and the version, message type,
-sequence number and payload length are only visible after decryption. The AEAD
-nonce is per-packet random, so packets can arrive out of order; the encrypted
-sequence number drives the receiver's sliding-window replay protection (RFC
-6479 style, 2048 entries). The inner length field lets the receiver discard any
-padding the sender chose to add.
+The AEAD associated data is empty, so the tag, the type, the sequence number
+and the length are all authenticated by the ciphertext. The length field is
+what tells the receiver how much of the tail is padding.
 
-Message types (recovered only after decryption for session messages):
+| Type | Value | Direction | Payload |
+| --- | --- | --- | --- |
+| handshake1 | `0x01` | client to server | raw Noise XK message 1, carries the session tag |
+| handshake2 | `0x02` | server to client | raw Noise XK message 2 |
+| handshake3 | `0x03` | client to server | raw Noise XK message 3, carries the client static key |
+| data | `0x04` | both | an IPv4 packet |
+| keepalive | `0x05` | both | an 8-byte timestamp the server echoes back |
+| close | `0x06` | both | an authenticated close |
+| rekey1..3 | `0x07`..`0x09` | both | a fresh Noise handshake inside an AEAD frame |
+| assign | `0x0A` | server to client | prefix, client address and gateway |
+| decoy | `0x0B` | both | cover traffic, authenticated and discarded |
 
-| type | value | direction | payload |
-|------|-------|-----------|---------|
-| handshake1 | 0x01 | client → server | Noise XK msg 1 (carries session tag) |
-| handshake2 | 0x02 | server → client | Noise XK msg 2 |
-| handshake3 | 0x03 | client → server | Noise XK msg 3 (authenticates client static) |
-| data        | 0x04 | both        | encrypted IP packet |
-| keepalive   | 0x05 | both        | encrypted RTT cookie / echo |
-| close       | 0x06 | both        | encrypted close notification |
-| rekey1..3   | 0x07..09 | both  | fresh Noise XK handshake inside an AEAD frame |
-| assign      | 0x0A | server → client | encrypted client address (prefix + ip + gateway) |
-| decoy       | 0x0B | both        | encrypted noise traffic, discarded by receiver |
+The three handshake messages are raw Noise messages with no framing at all;
+everything after them is an AEAD frame. The client pins the server's static
+public key, the server may keep an allowlist of client keys, and the server
+assigns the tunnel address in the first encrypted frame.
 
-### Handshake
+| Path | What it holds |
+| --- | --- |
+| `cmd/vpn/` | The CLI: `server`, `client`, `setup`, `keygen`, `certgen`, `status`, `quick`. |
+| `internal/crypto/` | The Noise handshake wrapper, key encoding, passphrase-encrypted keys, handshake cookies. |
+| `internal/session/` | The session state machine, the server session manager, the address pool, the statistics. |
+| `internal/framing/` | The wire format, the padding policies, the jitter decorator. |
+| `internal/protocol/` | Message types and the anti-replay sliding window. |
+| `internal/transport/` | The `Transport` interface and the UDP, TLS and raw TCP carriers. |
+| `internal/tun/` | The Linux TUN device and the Windows Wintun adapter. |
+| `internal/routing/` | TUN addresses, routes, IPv4 forwarding and nftables NAT, run through `ip`, `sysctl` and `nft`. |
+| `internal/desync/` | The nfqws integration for DPI desync of the tunnel's own TCP flow. |
+| `internal/ippkt/`, `internal/pcap/`, `internal/metrics/`, `internal/ctl/` | IPv4 header parsing, pcap capture, the Prometheus endpoint, the control socket. |
+| `docs/` | The protocol specification, the threat model, the deployment guide and the audit status. |
 
-`Noise_XK_25519_ChaChaPoly_SHA256` (3 messages, all payloads encrypted, carried
-as raw Noise messages with no framing):
+## Configuration
 
-1. client → server: `e, es` (payload: 4-byte opaque session tag)
-2. server → client: `e, ee` (payload: empty)
-3. client → server: `s, se` (payload: empty) → both sides `Split()` into the
-   transport keys.
+Both roles read one YAML file with a `client:` or a `server:` section. The
+examples in `configs/` carry every key with a comment.
 
-The server is authenticated because the client pins its static public key; the
-client is authenticated to the server because its static key is transmitted in
-the final message and checked against the optional `peers` allowlist. The
-session tag chosen by the client is encrypted inside the first message and is
-validated inside every later frame.
+| Key | Default | What it does |
+| --- | --- | --- |
+| `server` | none | Required. The server address as `host:port`. |
+| `private_key` / `private_key_encrypted` | none | Exactly one is required. The encrypted form is a `vibe-vpn keygen -encrypt` blob. |
+| `server_public_key` | none | Required. The server's X25519 public key, pinned by the client. |
+| `transport` | empty | `udp`, `tls` or `raw`. Empty picks TLS when a `tls:` section is present and UDP otherwise. |
+| `mtu` | `1280` | Tunnel MTU. Must be between 576 and 65535. |
+| `client_ip` | empty | A preferred address inside the server subnet. |
+| `keepalive_interval` | `20` | Seconds between keepalives. Must be smaller than `session_timeout`. |
+| `session_timeout` | `300` | Seconds of silence before the session is dropped. |
+| `rekey_after_packets` | `268435456` | Packets in a key's lifetime before a rekey. |
+| `rekey_after_seconds` | `120` | Seconds in a key's lifetime before a rekey. |
+| `setup_routing` | `false` | Configure the TUN address and the routes on start. |
+| `raw_server` | empty | A `host:port` for the bare TCP fallback carrier. |
+| `stats_interval` | `15` | Seconds between statistics lines. |
+| `metrics` | empty | A loopback address for the Prometheus endpoint. |
+| `ctl` | empty | The unix socket for `vibe-vpn status` and `vibe-vpn quick`. |
+| `tls.server_name` | the host part of `server` | SNI and the name the certificate must carry. |
+| `tls.ca` | none | The PEM bundle the server certificate is checked against. |
+| `tls.insecure` | `false` | Skip certificate verification. |
+| `tls.fingerprint` | `chrome` | `chrome`, `firefox` or `legacy`. |
+| `desync.enabled`, `desync.nfqws`, `desync.dpi_desync`, `desync.split_pos`, `desync.fooling` | off, `/usr/local/bin/nfqws`, `split2`, `2`, none | The nfqws desync policy for the tunnel's own TCP flow. |
 
-After the handshake the server assigns the client an address inside the tunnel
-subnet and sends it in the first encrypted session frame (the `assign`
-message). A reconnecting client reuses its previous address (a new session with
-the same static key takes over the old one).
+| Key | Default | What it does |
+| --- | --- | --- |
+| `listen` | `0.0.0.0:4433` | The UDP listener. |
+| `tls.listen` | none | The TLS listener, with `tls.cert` and `tls.key`. |
+| `raw.listen` | none | The bare TCP listener, which runs beside the other two. |
+| `private_key` / `private_key_encrypted` | none | Exactly one is required. |
+| `interface` | `vpn0` | The server's tunnel interface. |
+| `subnet` | `10.77.0.0/24` | The tunnel subnet. Its first address is the gateway. |
+| `outbound_interface` | `eth0` | The interface the NAT rule sends traffic out of. |
+| `nat` | `false` | Install the nftables masquerade. The generated `server.yaml` sets it to `true`. |
+| `peers` | empty | Client public keys allowed to connect. Empty allows any client that holds the server key. |
+| `max_sessions` | `1024` | Concurrent sessions. A `/24` subnet holds 253 addresses, so a `/16` is needed for 1024. |
+| `mtu` | `1280` | Tunnel MTU. |
+| `keepalive_interval` | `20` | Seconds between keepalives. |
+| `session_timeout` | `300` | Seconds of silence before a session is dropped. |
+| `stats_interval` | `15` | Seconds between statistics lines. |
+| `metrics` | empty | A loopback address for the Prometheus endpoint. |
+| `ctl` | empty | The unix socket for `vibe-vpn status`. |
+| `debug` | empty | A path prefix; the tunnel traffic is written to `<prefix>.pcap`. |
 
-### Traffic shaping
+The `shaping:` section is the same on both sides, and each side shapes only
+its own sends:
 
-The wire behaviour is configurable per side under `shaping:` in the YAML
-config, and is independent per direction:
+| Key | Default | What it does |
+| --- | --- | --- |
+| `padding` | `none` | `none`, `pad`, `bucket`, `random` or `web`. |
+| `pad_to` | none | The target wire size for `pad`. |
+| `bucket` | none | The multiple the wire size is rounded up to for `bucket`. |
+| `rand_max` | none | The padding ceiling for `random`. |
+| `decoy_interval_s` | `0` | How long the sender may stay silent before it emits a cover frame. |
+| `jitter_max_ms` | `0` | The largest random delay added before a send. |
 
-- `padding`: `none` (default) | `pad` (every session frame padded to a fixed
-  wire size) | `bucket` (wire size rounded up to a multiple) | `random`
-  (bounded random padding) | **`web`** (wire sizes sampled from the
-  distribution of real TLS records: mostly small frames, some medium, rare
-  large ones — so the packet-size histogram resembles ordinary HTTPS instead
-  of a constant-size tunnel). Padding is authenticated and trimmed by the
-  receiver using the encrypted length field.
-- `jitter_max_ms`: random delay added before each send (flattens timing
-  patterns and keepalive periodicity).
-- `decoy_interval_s`: when the sender has no real data for this long, it emits
-  an encrypted decoy frame that the receiver authenticates and discards. The
-  intervals are randomized so cover traffic does not fire like a metronome.
+## Development
 
-Because session frames carry no plaintext structure and are padded to
-predictable sizes, a passive classifier sees uniform, opaque UDP frames rather
-than a recognisable protocol. The initial handshake still consists of a couple
-of small raw Noise messages at session start, which is the main remaining
-fingerprint; experiments that need to hide even that can add a handshake
-framing policy on top of `internal/framing`.
-
-### Raw transport (obfs4-style, "looks like nothing")
-
-A third transport choice, `transport: raw`, runs the tunnel over bare TCP with
-**no TLS, no banner and no ALPN**. The Noise handshake (whose messages are
-already indistinguishable from random bytes) is carried directly over
-length-prefixed frames. The server behaves like a **black hole**: a connection
-that does not complete the handshake is simply closed, so anyone without the
-shared key sees only opaque random data.
-
-As a *sole* transport:
-
-```yaml
-# server
-server:
-  transport: raw
-  listen: 0.0.0.0:8443
-
-# client
-client:
-  transport: raw
-  server: 1.2.3.4:8443
+```bash
+make build         # build ./bin/vibe-vpn
+make test          # unit tests, ./internal/... only
+make cover         # the same suite with per-package coverage
+make vet           # go vet ./...
+make integration   # real TUN devices in a network namespace (root)
+make soak          # a 30-second ping flood against a live tunnel (root)
+make install       # the binary, the systemd units and the example configs
 ```
 
-As an *additional* listener (for redundancy — see "Transport redundancy"
-below), the server can also serve raw TCP alongside TLS/UDP:
+`make integration` and `make soak` need root, `iproute2`, `nftables` and
+`/dev/net/tun`. `make test` covers the packages under `internal/`; the test
+in `cmd/vpn/` is not part of it.
 
-```yaml
-# server
-server:
-  raw:
-    listen: 0.0.0.0:4444
+CI runs `gofmt`, `go vet`, `staticcheck`, `gosec`, `govulncheck`, the unit
+tests under the race detector, three fuzz targets and the integration test
+on every pull request.
 
-# client — fall back to raw TCP if the primary is blocked
-client:
-  raw_server: 1.2.3.4:4444
-```
+## License
 
-This is "looks like nothing" obfuscation in the spirit of
-[obfs4](https://github.com/Yawning/obfs4)/ScrambleSuit (a random-looking
-handshake instead of a recognizable protocol), not a byte-compatible obfs4
-(no Elligator 2 encoding). Trade-off: an HTTPS-camouflage port is
-indistinguishable from *web traffic*; a raw port is indistinguishable from
-*random noise* — which is itself a service-like pattern to an active analyser.
-Pick whichever fits your threat model, or rotate between them.
-
-### Transport redundancy (multi-transport server + client fallback)
-
-The server can bind **several transports at once** (UDP, TLS and raw TCP are
-independent listeners), and the client tries its transports **in order on every
-reconnect**, falling back to the next if the current one is unreachable or
-blocked. This means if, say, TLS on 443 is blocked but raw TCP passes, the
-tunnel comes up automatically over the fallback — no manual action.
-
-```yaml
-# server — UDP on 443, TLS on 443, raw on 4444, all at once
-server:
-  listen: 0.0.0.0:443      # UDP (rendezvous on 443, like QUIC)
-  tls:
-    listen: 0.0.0.0:443    # TCP 443 shares the port with the UDP listener
-    cert: /etc/vibe-vpn/server.crt
-    key: /etc/vibe-vpn/server.key
-  raw:
-    listen: 0.0.0.0:4444
-
-# client — try TLS first, then raw TCP
-client:
-  server: vpn.example.com:443
-  raw_server: vpn.example.com:4444
-```
-
-See `docs/deployment.md` for CDN masking (nginx `stream`, Cloudflare Spectrum)
-and full redundancy guidance.
-
-### wg-quick-style client lifecycle (`vibe-vpn quick`)
-
-`vibe-vpn quick up|down|status --config client.yaml` manages the client as a
-background daemon, in the spirit of `wg-quick up/down`:
-
-```sh
-sudo vibe-vpn quick up     --config client.yaml   # start the client as a daemon
-sudo vibe-vpn quick status --config client.yaml   # show the running daemon's stats
-sudo vibe-vpn quick down   --config client.yaml   # stop the daemon gracefully
-```
-
-The client config must set `ctl:` (the control socket) for this to work.
-Logs go to `<ctl>.log`.
-
-### Windows client
-
-The client also runs on Windows (the server remains Linux-only). It uses the
-**Wintun** driver (from the WireGuard project, loaded at runtime as
-`wintun.dll`) and configures routing through `netsh`/`route`. Everything else
-— the protocol, session, crypto and all three transports — is platform
-independent.
-
-- Download `vibe-vpn-<version>-windows-amd64.zip` from a GitHub Release.
-- Install the Wintun driver (a `wintun.dll` next to the executable), run as
-  Administrator:
-  ```sh
-  vibe-vpn.exe client --server your.domain:443 --peer <server-dir> --out C:\vibe-vpn
-  ```
-- Notes: the control socket (`ctl:`) works, but POSIX signals (`SIGUSR1`,
-  `SIGHUP`) are not delivered on Windows, and the desync (nfqws) integration is
-  Linux-only.
-
-### TLS transport (HTTPS camouflage)
-
-The client and server also support a TLS transport that hides the tunnel inside
-ordinary HTTPS. It uses the same `Transport` interface, so the session layer is
-untouched. Features:
-
-- TLS 1.2/1.3 with a real certificate (`vibe-vpn certgen -out server -cn vpn.example.com`
-  generates a self-signed certificate; the client pins it as a CA).
-- **Browser fingerprint mode (default)**: the client's ClientHello imitates a
-  real browser (Chrome or Firefox via [uTLS](https://github.com/refraction-networking/utls)),
-  advertises the ordinary `http/1.1` ALPN and speaks TLS 1.3. The tunnel is
-  selected by a short magic sequence written inside the (encrypted) TLS stream,
-  so there is no custom ALPN in the plaintext handshake.
-- **Legacy mode** (`fingerprint: legacy`): the custom `vibe/1` ALPN selects
-  the tunnel directly.
-- The server answers browsers and probes with a real `HTTP 200` response, so
-  the port behaves like a normal web server either way.
-- Inside TLS the datagrams are packetized with a 4-byte length prefix. TCP is
-  reliable, so the replay/sequence logic is unchanged.
-- Optional TLS config is per side:
-
-```yaml
-# server
-tls:
-  listen: 0.0.0.0:443
-  cert: /etc/vibe-vpn/server.crt
-  key:  /etc/vibe-vpn/server.key
-
-# client
-tls:
-  server_name: vpn.example.com    # SNI + certificate name
-  ca: /etc/vibe-vpn/server.crt      # pin the server certificate
-  fingerprint: chrome             # chrome | firefox | legacy (default: chrome)
-  # insecure: true                # skip verification (prototype only)
-```
-
-To a passive observer the flow is TLS to a web server — a browser ClientHello,
-`http/1.1` ALPN, TLS 1.3, and no distinctive protocol signature. This removes
-the main plaintext fingerprints (custom ALPN, Go TLS stack). It is still a
-fixed protocol: TLS itself and the transport behaviour are well understood, so
-treat it as one more experiment in the lab rather than a guarantee against
-active probing.
-
-### Combining with zapret (client-side DPI desync)
-
-[zapret](https://github.com/bol-van/zapret) fights DPI at the packet level
-(NFQUEUE/raw sockets) on the client. The tunnel client can **run the desync
-itself** as part of `vibe-vpn client`: it creates an nftables queue rule for the
-tunnel's TCP flow, starts `nfqws`, and removes both on exit. One command, two
-mechanisms.
-
-Build nfqws from the zapret repo (Linux, root):
-
-```sh
-# e.g. on Debian/Ubuntu:
-apt install -y libnetfilter-queue-dev libnfnetlink-dev libmnl-dev libcap-dev
-git clone https://github.com/bol-van/zapret && cd zapret/nfq && make
-# the binary is ./nfqws
-```
-
-Then enable it in the client config (the tunnel must use the TLS transport):
-
-```yaml
-client:
-  server: vpn.example.com:443
-  # ...
-  tls:
-    server_name: vpn.example.com
-    ca: /etc/vibe-vpn/server.crt
-  desync:
-    enabled: true
-    nfqws: /usr/local/bin/nfqws
-    dpi_desync: split2      # split2 | fake | fake,multisplit | ...
-    split_pos: "2"          # for split modes ("" disables)
-    fooling: badseq         # for fake modes ("" disables)
-```
-
-On start the client logs `DPI desync active for tcp/<port> via <nfqws> (mode
-...)`, creates the `vibe-desync` nftables table with a `queue` rule for that
-port, and spawns nfqws with the matching strategy. The tunnel then carries
-traffic through the desynced TCP flow. On exit both the process and the rule
-are removed.
-
-Verified in a lab netns on this project: with `split2` and with `fake`/`badseq`
-strategies the TLS tunnel keeps working (3/3 ICMP through the tunnel), and a
-negative control (queue rule present but no nfqws handler) stalls the tunnel,
-confirming nfqws genuinely intercepts and modifies the tunnel's TCP flow.
-
-Note: this verifies the mechanics of the combination only. It is not a test
-against a real TSPU deployment, and zapret's per-provider tuning
-(`blockcheck.sh`) still needs to be done where you intend to use it.
-
-### Session mechanisms
-
-- **Sequence numbers + sliding window** — out-of-order tolerant, replay-proof.
-- **Keepalive** — client sends an 8-byte monotonic cookie every
-  `keepalive_interval`; the server echoes it, which measures RTT and keeps both
-  sides' liveness timers fresh.
-- **Session timeout** — a session with no traffic for `session_timeout`
-  seconds is closed (and, on the client, a reconnect is started).
-- **Reconnect** — the client re-dials, re-handshakes and re-assigns its
-  address transparently.
-- **Rekey** — after `rekey_after_packets` or `rekey_after_seconds` the client
-  runs a fresh Noise handshake inside the session (`rekey1..3`) and both sides
-  atomically swap to new keys and a fresh sequence space.
-- **Multiple clients** — the UDP server demultiplexes by source address; each
-  session owns an address from the pool.
-- **Graceful close** — the client sends an authenticated `close` on shutdown.
-- **Packet size / MTU** — data packets larger than `mtu` are dropped and
-  counted; IPv6 is dropped (IPv4 only in this version).
-- **Malformed packets** — anything that fails framing, handshake
-  authentication, AEAD or the replay window is dropped and counted; garbage
-  before a handshake closes the session immediately.
-
-## Building
-
-Requires Go 1.21+ and Linux with `/dev/net/tun`.
-
-```sh
-make build            # builds ./bin/vibe-vpn
-make test             # unit + loopback e2e tests (no root needed)
-make integration      # full TUN integration test (requires root)
-```
-
-## Installation
-
-The binary runs from anywhere; a `make install` installs it system-wide
-together with systemd units and example configs:
-
-```sh
-make build          # build ./bin/vibe-vpn
-make install        # installs to /usr/local (PREFIX=... to change)
-```
-
-Releases are published as GitHub Releases with `.tar.gz` archives, `.deb` and
-`.rpm` packages (linux amd64/arm64). Installing a release is one line:
-
-```sh
-curl -fsSL https://aa-blinov.github.io/vibe-vpn/install | bash
-```
-
-This installs:
-
-- `/usr/local/bin/vibe-vpn`
-- `/usr/local/lib/systemd/system/vibe-vpn-server.service`
-- `/usr/local/lib/systemd/system/vibe-vpn-client.service`
-- `/etc/vibe-vpn/server.yaml.example`, `/etc/vibe-vpn/client.yaml.example`
-
-Generate a config (see Quick start), then manage the server as a service:
-
-```sh
-sudo cp /etc/vibe-vpn/server.yaml.example /etc/vibe-vpn/server.yaml
-sudo systemctl enable --now vibe-vpn-server
-journalctl -u vibe-vpn-server -f
-```
-
-The client service works the same way with `vibe-vpn-client`.
-
-Diagnostics:
-
-- `vibe-vpn --version` prints the version.
-- `kill -USR1 <pid>` dumps current statistics to the log on demand.
-- `kill -HUP <server pid>` reloads the config file and applies the `peers`
-  allowlist at runtime (no restart).
-- `vibe-vpn status --config <file>` prints a running daemon's status (like
-  `wg show`) via a control socket; set `ctl: /run/vibe-vpn.sock` in the config.
-  The server reports sessions/handshakes/traffic, the client its full stats.
-- Statistics are also logged every `stats_interval` seconds.
-
-## Quick start (two Linux machines)
-
-On the **server** and the **client**, build the binary:
-
-```sh
-make build
-```
-
-Both machines need `sudo` and `/dev/net/tun`. That's it — everything else
-(keys, TLS certificate, configs) is generated for you.
-
-### Interactive setup (recommended)
-
-The `vibe-vpn.sh` script asks the few questions and prepares everything.
-
-**Server** (on the VPS):
-
-```sh
-./vibe-vpn.sh server
-```
-
-It prompts for the domain, the TLS port, the output directory and the subnet,
-then generates keys + certificate + config, opens the firewall port and offers
-to install a systemd service (auto-start on boot). It can also enable an
-obfs4-style raw TCP fallback port for transport redundancy. At the end it
-prints the directory to copy to the client.
-
-**Client** (on your machine):
-
-```sh
-./vibe-vpn.sh client
-```
-
-It asks for the server address (`vpn.example.com:443`), the peer directory
-(copied from the server), whether to enable nfqws desync and whether to enable
-the raw TCP fallback, then generates the client config and offers to connect
-immediately.
-
-### One-command setup and run (no script)
-
-**Server** (a single command generates keys + certificate + config and starts
-listening):
-
-```sh
-sudo ./bin/vibe-vpn server --domain vpn.example.com --out /etc/vibe-vpn-server
-```
-
-It prints the generated files. Copy the output directory to the client
-(`/etc/vibe-vpn-server` contains `peer.txt`, `server.crt`, `server.pub`).
-
-**Client** (single command; `-peer` is the directory copied from the server):
-
-```sh
-sudo ./bin/vibe-vpn client --server vpn.example.com:443 --peer /etc/vibe-vpn-server --out /etc/vibe-vpn-client
-```
-
-The client connects automatically. Verify with:
-
-```sh
-ping 10.77.0.1        # server's tunnel gateway
-```
-
-Optional flags:
-
-- Server: `--tls-listen 0.0.0.0:443` (default), `--subnet 10.77.0.0/24`,
-  `--interface vpn0`, `--no-nat` (skip nftables masquerade).
-- Client: `--desync` (enable nfqws DPI desync of the tunnel's TCP flow; needs
-  the nfqws binary), `--nfqws /path/to/nfqws`, `--no-routing`.
-
-### Manual configuration
-
-If you prefer to write the configs yourself, follow the sections below for
-keys, configs, forwarding/NAT and run commands.
-
-### 1. Generate keys
-
-On the server:
-
-```sh
-./bin/vibe-vpn keygen   # prints private_key and public_key
-```
-
-Keep the server `private_key` for the server config and the server
-`public_key` for the client config. On each client, run `./bin/vibe-vpn keygen`
-and keep its `private_key` (and optionally list its `public_key` in the
-server's `peers` allowlist).
-
-### 2. Server config (`server.yaml`)
-
-```yaml
-server:
-  listen: 0.0.0.0:4433
-  private_key: <server private key>
-  interface: vpn0
-  subnet: 10.77.0.0/24
-  outbound_interface: eth0     # interface used for internet access
-  nat: true                    # install nftables masquerade automatically
-  # peers:                     # optional allowlist
-  #   - <client1 public key>
-  #   - <client2 public key>
-  mtu: 1280
-  keepalive_interval: 10
-  session_timeout: 300
-  # debug: /tmp/vibe-vpn-server  # writes /tmp/vibe-vpn-server.pcap
-```
-
-### 3. Client config (`client.yaml`)
-
-```yaml
-client:
-  server: <server public ip>:4433
-  private_key: <client private key>
-  server_public_key: <server public key>
-  mtu: 1280
-  # client_ip: 10.77.0.2       # optional preferred address
-  setup_routing: true          # configure TUN address + routes automatically
-  keepalive_interval: 20
-  session_timeout: 300
-  rekey_after_packets: 268435456
-  rekey_after_seconds: 180
-  # debug: /tmp/vibe-vpn-client  # writes /tmp/vibe-vpn-client.pcap
-```
-
-### 4. Server: forwarding + NAT
-
-The server does the first two steps itself (it calls `sysctl` and `nft`), but
-here they are explicitly:
-
-```sh
-# IPv4 forwarding
-sysctl -w net.ipv4.ip_forward=1
-
-# nftables masquerade (10.77.0.0/24 -> eth0)
-nft add table ip vibe-vpn
-nft 'add chain ip vibe-vpn postrouting { type nat hook postrouting priority 100; }'
-nft add rule ip vibe-vpn postrouting ip saddr 10.77.0.0/24 oifname "eth0" masquerade
-```
-
-If your host firewall would otherwise drop tunnel traffic, allow it, for
-example:
-
-```sh
-nft add rule ip filter INPUT iifname "vpn0" accept
-nft add rule ip filter INPUT ip protocol icmp accept
-```
-
-### 5. Run
-
-On the server:
-
-```sh
-sudo ./bin/vibe-vpn server --config server.yaml
-```
-
-On the client:
-
-```sh
-sudo ./bin/vibe-vpn client --config client.yaml
-```
-
-### 6. Test
-
-From the client:
-
-```sh
-ping 10.77.0.1          # ping the server's tunnel gateway
-ping 8.8.8.8            # through the tunnel + NAT
-curl https://example.com
-```
-
-The client logs its assigned address and, every `stats_interval` seconds, a
-statistics line:
-
-```
-role=client tx_pkts=123 tx_bytes=15000 rx_pkts=121 rx_bytes=14800 dropped=2
-handshakes=1 handshake=1.2ms reconnects=0 rekeys=0 rtt=24.3ms loss=0
-sizes(<=64/256/1k/1500/gt)=10/40/30/10/0
-```
-
-## Tests
-
-- `make test` — unit tests for crypto (handshake/keys), framing (seal/open,
-  padding policies, jitter), protocol (message types, replay window), the
-  session stack (data flow, multi-client, rekey, reconnect, timeout, malformed
-  traffic), transport framing, and config validation, plus an end-to-end run
-  over real loopback UDP with fake TUNs and dedicated obfuscation tests
-  (uniform padded frames, bucket sizes, web profile, decoy traffic). No root
-  required.
-- `make cover` — runs the same suite with per-package coverage. Most packages
-  are 70-94% covered; the root-gated parts (`tun`, the `nft`/`nfqws` exec paths
-  in `routing`/`desync`) are exercised by the integration test instead.
-- `make integration` — builds the real binaries and brings up a network
-  namespace with actual TUN devices, then pings the server gateway through the
-  tunnel. Requires root, iproute2, nftables and `/dev/net/tun`.
-- `make soak` — a long-running reliability test: the real tunnel runs under a
-  sustained ping flood for `SOAK_SECONDS` (default 30) and must stay connected
-  and lossless afterwards. Requires root; also run before every release.
-
-```sh
-VPN_INTEGRATION=1 sudo -E go test ./test/integration/ -v -count=1
-```
-
-## Docker (server)
-
-```sh
-docker build -f Dockerfile.server -t vibe-vpn-server .
-# forward the tunnel port and give the container the tunnel device + NET_ADMIN
-docker run --rm -it \
-  --device /dev/net/tun \
-  --cap-add NET_ADMIN \
-  -p 4433:4433/udp \
-  -v $PWD/configs/server.yaml:/etc/vibe-vpn/server.yaml:ro \
-  vibe-vpn-server server --config /etc/vibe-vpn/server.yaml
-```
-
-> NAT inside the container is limited: the container must itself be the NAT
-> device for its clients, so it needs `--net=host` (or an appropriate
-> outbound_interface) to masquerade on behalf of tunnel clients.
-
-## Experimenting with transports and shaping
-
-To add a transport, implement `transport.Transport` and wire it into
-`cmd/vibe-vpn` (or a test):
-
-- `Send([]byte)` must deliver one frame reliably (UDP: one datagram).
-- `Receive()` must return one frame at a time and return an error once closed.
-
-The session layer handles fragmentation limits via `mtu`, so a transport can
-choose its own framing, padding, batch size or scheduling policy without
-touching `internal/session`, `internal/crypto` or `internal/protocol`.
-
-The frame format and the padding/jitter/decoy policy live in
-`internal/framing`, decoupled from the session logic. Swapping the shaping
-policy, or adding a new one, does not require touching the handshake, the keys
-or the session state machine. `framing.Jitter` is a transport decorator, so it
-can be wrapped around any `Transport` implementation.
-
-## Troubleshooting
-
-- **`vibe-vpn client` exits with a config error** — the config is validated on
-  start; the message names the offending field (e.g. bad `server` address, a
-  `tls.ca` path that does not exist, `shaping.padding` typo).
-- **The tunnel never comes up** — check the client log. `assigned` not printed
-  means the handshake failed: confirm the server is reachable on the TLS port
-  (`nc -vz <server> 443`), the server's public key in the client config matches
-  `server.pub`, and the client trusts the CA in `tls.ca`.
-- **`ping 10.77.0.1` fails but the client is assigned** — the tunnel is up;
-  the server gateway may be unreachable because the server TUN is not
-  configured or forwarding is off (see server `ip`/`sysctl` steps).
-- **Traffic flows but websites do not resolve** — DNS is not tunnelled by
-  default on the server side; point the client's DNS at the server or use a
-  resolver over the tunnel.
-- **UDP port is blocked by the ISP** — use the TLS transport (port 443) or a
-  custom `--tls-listen`/`--listen` port.
-- **nfqws desync is configured but the tunnel is slow or stalls** — verify the
-  `nfqws` binary exists and the strategy matches your network; try `split2`
-  before `fake`, or disable desync to isolate.
-- **Statistics are always zero** — counters are per-session atomics; look at
-  the periodic log line and `kill -USR1 <pid>` for a snapshot.
-- **"permission denied" opening `/dev/net/tun`** — run as root; in a container
-  pass `--device /dev/net/tun --cap-add NET_ADMIN`.
-
-## Security
-
-### What the protocol provides
-
-- **Confidentiality and integrity** for all tunnel traffic. The Noise XK
-  handshake (X25519, ChaCha20-Poly1305, SHA-256) establishes transport keys,
-  and every session frame is authenticated with per-frame AEAD and a fresh
-  random nonce. No custom cryptography is used.
-- **Authenticated peers.** The client pins the server's static public key; the
-  server can enforce a `peers` allowlist. A rekey re-authenticates the same
-  peer inside the session.
-- **Replay protection.** An RFC 6479-style sliding window rejects replays while
-  tolerating out-of-order delivery.
-- **Forward secrecy.** Every handshake — initial and rekey — uses fresh
-  ephemeral keys, so past sessions are not recoverable from a later key
-  compromise.
-- **Defensive input handling.** Frames that fail framing, handshake
-  authentication, AEAD or the replay window are dropped and counted; garbage
-  before a handshake closes the connection immediately.
-- **Anti-spoofing handshake cookies.** Beyond a per-IP handshake rate limit
-  the server demands an HMAC-bound cookie before it performs the expensive
-  Noise DH, mitigating spoofed-source handshake floods. Cookies are keyed to
-  the client IP and a time window.
-
-### What it is not
-
-- This is a **research prototype**, not an audited production VPN. It has not
-  been through a formal security review. Keys are stored on disk `0600`; use
-  `vibe-vpn keygen -encrypt` to protect a key at rest with a passphrase.
-- The obfuscation layer (encrypted metadata, padding profiles, browser TLS
-  fingerprint, cover traffic) raises the cost of passive traffic
-  classification but is **not a guarantee of undetectability**. Any fixed
-  protocol can eventually be fingerprinted by a determined active analyser;
-  treat resistance to DPI as something to measure per deployment, in a lab,
-  not as an absolute property.
-- There is no DDoS defence beyond dropping malformed pre-handshake traffic,
-  and no defence against active probing of the server endpoint.
-
-### Using it responsibly
-
-Deploy it on infrastructure you control and be aware of the laws of the
-jurisdiction where you operate it. For needs that require audited, supported
-software, use an established VPN implementation (e.g. WireGuard).
+MIT, © Alexander Blinov. See [LICENSE](LICENSE).
