@@ -1,137 +1,199 @@
-<!-- house-style: template — fill this file in, then delete this line -->
-
 ---
 name: vibe-vpn
-description: One line that says what this does.
+description: A terminal program with no visual identity of its own; the output is plain text and nothing else.
 colors:
-  primary: "#2b3a55"
-  neutral-bg: "#faf7f2"
+  none: "the program writes no escape sequences, so the output takes the colour of the terminal"
 typography:
   body:
-    fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif"
-    fontSize: "16px"
+    fontFamily: "terminal default, monospace"
+    fontSize: "terminal default"
     fontWeight: 400
-    lineHeight: 1.6
+    lineHeight: 1.2
   title:
-    fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif"
-    fontSize: "32px"
+    fontFamily: "terminal default, monospace"
+    fontSize: "terminal default"
     fontWeight: 700
     lineHeight: 1.2
-    letterSpacing: "-0.02em"
 rounded:
-  md: "8px"
+  none: "0px"
 spacing:
-  sm: "8px"
-  md: "16px"
+  indent: "2 spaces"
+  column: "2 columns"
 ---
 
-# Design System: vibe-vpn
-
-<!--
-  A stub. Fill it in when the project has a visual system, or delete the
-  file if it does not have one — a project with no interface does not need
-  a design document, and an empty one is worse than none.
-
-  The frontmatter is normative: it is the machine-readable token layer that
-  tools consume. The prose explains how to apply the tokens. When they
-  disagree, the frontmatter is right.
-
-  Keep the eight sections in this order. Omit the ones that do not apply.
--->
+# Design system: vibe-vpn
 
 ## Overview
 
-**Creative North Star: "[a named metaphor]"**
+**Creative North Star: "a line of plain text on a terminal"**
 
-<!--
-  Two or three paragraphs: the personality, the density, the aesthetic
-  philosophy. Start from the north star and work outward. State the
-  confirmed rejections. End with a short key-characteristics list.
--->
+This project has no visual identity. There is no window, no page, no
+stylesheet, no icon and no image. `vibe-vpn` is a command line program, and
+everything a person sees is a line of text in a terminal.
+
+The repository emits no ANSI escape sequence anywhere. There is no colour
+code, no bold, no cursor movement and no box drawing. The output takes the
+palette of whatever terminal it runs in, and the only thing the project
+controls is the words and the layout of those lines.
+
+That is a deliberate choice for a project whose subject is traffic shaping.
+A program that disguises its traffic does not need a disguise of its own,
+and a colour code in a log line is one more byte in a captured session.
+The consequence is that the interface cannot be differentiated, and every
+line has to carry its meaning in the words themselves.
+
+What the repository does own is a small set of text conventions, and they
+are consistent across the Go binary, the shell script and the installer.
+
+Key characteristics:
+
+- no colour, no styling, no escape sequence;
+- one line per fact, and the fact is a number;
+- errors are one line, prefixed, on standard error;
+- the usage text is a fixed block with a fixed indent.
 
 ## Colors
 
-<!--
-  Group by role, not by hue. Primary, secondary, tertiary, neutral — and
-  name the colours rather than listing hex codes in prose, because the
-  frontmatter already carries the values.
--->
+There are none, and that is the record.
 
-### Primary
+The Go program writes plain text through `fmt` and the standard `log`
+package, and neither of them adds styling. A search for an escape
+sequence across `cmd/` and `internal/` finds nothing. The shell script and
+the installer use `printf` and `echo` for the same reason.
 
-- **[Descriptive name]** (`#2b3a55`): where and why it is used.
+The colours that a reader sees are the terminal's, and the project has no
+say in them. There is no light and no dark set, no accent, and no token
+that a theme could change.
 
-### Neutral
+### Named rules
 
-- **[Descriptive name]** (`#faf7f2`): the ground.
+**The Plain Text Rule.** No line of output carries an escape sequence. The
+terminal decides the colour, and the words carry the meaning.
 
-### Named Rules
-
-**The [Rule Name] Rule.** A short, memorable doctrine.
+**The Terminal Inherits Rule.** Nothing in the output depends on a colour,
+a bold face or a background. Every line has to be readable in a pipe, in a
+log file and in a terminal with a monochrome scheme.
 
 ## Typography
 
-**Display Font:** [family]
-**Body Font:** [family]
+**Display Font:** the terminal's.
+**Body Font:** the terminal's.
 
-<!--
-  The hierarchy, with the real values: display, headline, title, body,
-  label. Say what each one is for and where it appears.
--->
+There is no font file and no font stack. The text is rendered by the
+terminal, in whatever family and at whatever size the terminal uses.
+
+The project controls the shape of each line:
+
+- **Key and value.** The statistics line is a run of `key=value` pairs,
+  separated by a single space, with no punctuation between them.
+- **Prefix.** An error is `error: ` followed by the message. Nothing else in
+  the program carries a prefix.
+- **Indent.** The usage block indents its verbs by two spaces and its
+  flags by two more.
+- **Case.** Lower case for the words of a message, lower case for the keys
+  of the statistics line, and the one exception is the unit suffix of a
+  duration, which is the one the `time` package prints.
+
+### Named rules
+
+**The One Line Rule.** One fact per line, and the line is a complete
+sentence of a machine-readable kind. The statistics line is the strict case:
+every pair is `key=value`, and a person reads it as a table.
 
 ## Layout
 
-<!--
-  The spatial model: the grid, the container, the density, the spacing
-  rhythm, what changes on a narrow screen.
--->
+The program's output has three shapes, and the shape is decided by what
+produced it.
+
+**The usage block.** One header line, then the verb list, then the flag
+list. The verbs are indented by two spaces, and the description of a verb
+that needs a second line is indented by 44 spaces so that it lines up under
+the first.
+
+**The statistics line.** A single line of `key=value` pairs, written to the
+log every `stats_interval` seconds. The order of the pairs is fixed, so two
+lines can be compared with `diff`.
+
+**The setup output.** `vibe-vpn setup server` prints where it wrote and the
+command that starts it, and the command is the one that was printed above
+it.
+
+The shell script and the installer have their own markers. The script
+prints a step as `[==>] <what it is doing>`, and the installer prints one as
+`==> <what it is doing>`. Neither marker is coloured and neither is
+indented.
+
+There is no width to design for. A line that is too long wraps in the
+terminal, and the project does not try to prevent it.
 
 ## Elevation & Depth
 
-<!--
-  Flat, layered or lifted. If there are no shadows, say so explicitly and
-  describe how depth is conveyed instead.
--->
+There is none. A terminal has no layers, and the program adds none: there
+is no box, no rule, no shadow and no background. The only thing that
+separates one message from the next is the newline.
 
 ## Shapes
 
-<!--
-  The radius strategy, the borders, the clipping, the recurring form.
--->
+There are none. Nothing is drawn, so there is no radius and no border.
 
 ## Components
 
-<!--
-  For each component: a character line, then the shape, the colour
-  assignment, the states, and anything distinctive about its behaviour.
--->
+### The usage block
 
-### Buttons
+- **Shape:** a fixed block of plain text on standard error.
+- **Header:** `vibe-vpn - research VPN prototype`, one line.
+- **Verbs:** two spaces of indent, the verb, then the arguments.
+- **Flags:** two spaces of indent, the flag, then the description.
 
-- **Shape:** [radius, in words and in parens]
-- **Primary:** [colour assignment and padding]
-- **Hover / Focus:** [transitions, treatments]
+### The statistics line
 
-### Inputs / Fields
+- **Shape:** one line, `key=value` pairs separated by a single space.
+- **Order:** fixed. `role`, the four counters, `dropped`, `handshakes`,
+  `handshake`, `reconnects`, `rekeys`, `rtt`, `loss`, then the five size
+  buckets.
+- **Units:** the counters are bare numbers, the duration is what the `time`
+  package prints, and the size buckets are a slash-separated group.
 
-- **Style:** [stroke, background, radius]
-- **Focus:** [treatment]
-- **Error / Disabled:** [if applicable]
+### The error line
+
+- **Shape:** `error: <message>`, one line, on standard error.
+- **Rule:** the message names what failed and, where the program knows it,
+  the number. The exit code is 1.
+
+### The shell prompts
+
+- **Shape:** `read -rp`, so the prompt and the answer share a line.
+- **Default:** the default value in square brackets before the colon, and
+  an empty answer takes it.
+- **Steps:** `[==>] <step>` in the script, `==> <step>` in the installer.
+
+### The metrics endpoint
+
+- **Shape:** the Prometheus text format, served on a loopback address.
+- **Rule:** the address is configured, and it is never a public one.
 
 ## Do's and Don'ts
 
-<!--
-  Concrete guardrails, each one leading with "Do" or "Don't". Exact values
-  only where they have been established. These are the rules a new screen
-  is measured against, so write them as tests rather than as advice.
--->
+### Don't:
+
+- **Don't** add an escape sequence to any output line. The traffic this
+  program carries is meant to look like nothing, and its own output is
+  meant to look like nothing too.
+- **Don't** add a colour, a bold face or a background to a message. The
+  meaning has to be in the words, because the output ends up in a log file.
+- **Don't** draw a box, a rule or a separator between messages.
+- **Don't** change the order of the pairs in the statistics line. Two
+  statistics lines are compared with `diff`, and the order is what makes
+  that work.
+- **Don't** let a message run to more than one line, except in the usage
+  block, where the continuation lines are indented to line up.
 
 ### Do:
 
-- **Do** [specific prescription].
-- **Do** [specific prohibition inverted].
-
-### Don't:
-
-- **Don't** [specific prohibition].
-- **Don't** [specific prohibition].
+- **Do** put the number in the message. The port, the address, the packet
+  count and the duration belong in the line that says what happened.
+- **Do** write errors on standard error with the `error: ` prefix, and
+  leave standard output for the result.
+- **Do** keep the two-space indent in the usage block and the flag list.
+- **Do** keep the markers of the script and of the installer as they are,
+  so that a transcript of either reads the same way.
